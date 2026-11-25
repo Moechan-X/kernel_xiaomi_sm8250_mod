@@ -133,7 +133,7 @@ scripts/config --file out/.config \
     -e PERF_HELPER \
     -e BOOTUP_RECLAIM \
     -e MI_RECLAIM \
-    -e RTMM \
+    -e RTMM
 make $MAKE_ARGS -j$(nproc)
 
 if [ ! -f "out/arch/arm64/boot/Image" ]; then
