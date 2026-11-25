@@ -35,6 +35,8 @@ MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-g
 if [ ! -d KernelSU ]; then
     git clone --depth=1 -b builtin https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
 fi
+# 4.19 内核没有 linux/static_call.h（5.10+ 才引入），builtin 分支中该头未被使用，直接移除引用
+sed -i '/#include <linux\/static_call.h>/d' KernelSU/kernel/kernel_includes.h
 ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
 grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
 grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
