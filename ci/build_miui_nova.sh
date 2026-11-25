@@ -37,6 +37,8 @@ if [ ! -d KernelSU ]; then
 fi
 # 4.19 内核没有 linux/static_call.h（5.10+ 才引入），builtin 分支中该头未被使用，直接移除引用
 sed -i '/#include <linux\/static_call.h>/d' KernelSU/kernel/kernel_includes.h
+# 4.19 的 access_ok 仍是三参数形式 (type, addr, size)
+sed -i 's/access_ok(u64_to_user_ptr(cmd.result_code), sizeof(result))/access_ok(VERIFY_WRITE, u64_to_user_ptr(cmd.result_code), sizeof(result))/' KernelSU/kernel/extension/kpm/kpm.c
 ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
 grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
 grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -102,11 +104,11 @@ sed -i 's/\/\/39 01 00 00 01 00 03 51 03 FF/39 01 00 00 01 00 03 51 03 FF/g' ${d
 sed -i 's/\/\/39 01 00 00 11 00 03 51 03 FF/39 01 00 00 11 00 03 51 03 FF/g' ${dts_source}/dsi-panel-j2-p2-1-38-0c-0a-dsc-cmd.dtsi
 
 make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
-# SukiSU Nova: KSU + SUSFS + KPM（SUSFS 子选项默认全开）
+# SukiSU Nova: KSU + KPM（SUSFS 需要内核侧 v2 补丁，暂不开启）
 scripts/config --file out/.config \
     -e KSU \
-    -e KSU_SUSFS \
     -e KPM
+scripts/config --file out/.config -d KSU_SUSFS
 # MIUI 专用配置
 scripts/config --file out/.config \
     --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
