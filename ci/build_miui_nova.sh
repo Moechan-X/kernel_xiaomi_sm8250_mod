@@ -53,6 +53,9 @@ bool ksu_vfs_read_hook __read_mostly = true;
 bool ksu_input_hook __read_mostly = true;
 EOF
 grep -q "ksu_hooks_global" kernel/Makefile || echo "obj-y += ksu_hooks_global.o" >> kernel/Makefile
+# Nova 的 supercall 引用了 SUSFS v2.4+ 才有的 CMD_SUSFS_SET_SUS_PATH_UID_FILTER，
+# 内核里的 SUSFS 是 v2.3.0，去掉这分支（只影响按 uid 隐藏路径的过滤，不影响基本隐藏）
+sed -i '/CMD_SUSFS_SET_SUS_PATH_UID_FILTER/d; /susfs_set_sus_path_uid_filter/d' KernelSU/kernel/supercall/supercall.c
 ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
 grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
 grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
