@@ -45,21 +45,43 @@ else
     echo "KSU_ENABLE=false：构建纯原版基线（不集成 KernelSU）"
 fi
 
-# ---------------- 性能/功能补丁 (ci/patches/*.patch) ----------------
-# PERF_ENABLE=false 时不应用任何补丁，构建官方原版行为。
-# 补丁按数字前缀顺序应用；git apply 失败会中止构建（防呆）。
+# ---------------- 性能/功能调优 (PERF_ENABLE) ----------------
+# 用 sed/perl 精确改数值：不依赖补丁上下文、可重复执行（幂等）。
+# PERF_ENABLE=false 时全部跳过，保持官方原版行为。
 if [ "${PERF_ENABLE:-true}" = "true" ]; then
-    if [ -d "ci/patches" ]; then
-        for p in ci/patches/*.patch; do
-            [ -f "$p" ] || continue
-            echo "Applying perf patch: $p"
-            git apply --whitespace=nowarn "$p"
-        done
-    else
-        echo "PERF_ENABLE=true but ci/patches/ not found, skipping."
+    echo "=== Applying performance tunings ==="
+
+    # 1) WALT schedutil：hispeed 门槛 90->80；金核/大核 rtg boost 0->1.5/1.8GHz
+    SU=kernel/sched/cpufreq_schedutil.c
+    if [ -f "$SU" ]; then
+        sed -i 's/^#define DEFAULT_HISPEED_LOAD 90$/#define DEFAULT_HISPEED_LOAD 80/' $SU
+        sed -i 's/^#define DEFAULT_CPU4_RTG_BOOST_FREQ 0$/#define DEFAULT_CPU4_RTG_BOOST_FREQ 1516800/' $SU
+        sed -i 's/^#define DEFAULT_CPU7_RTG_BOOST_FREQ 0$/#define DEFAULT_CPU7_RTG_BOOST_FREQ 1804800/' $SU
+        grep -q "DEFAULT_HISPEED_LOAD 80" $SU && echo "  [ok] schedutil tunables" || echo "  [warn] schedutil pattern mismatch"
+    fi
+
+    # 2) cpu-boost：触控/按键 boost 默认频率（银 1.28 / 金 1.6 / 大核 1.8-2.05GHz）
+    CB=drivers/cpufreq/cpu-boost.c
+    if [ -f "$CB" ] && ! grep -q "perf: input boost defaults" "$CB"; then
+        perl -0pi -e 's/(\t\ts->cpu = cpu;\n)/$1\t\t\/* perf: input boost defaults *\/\n\t\tif (cpu <= 3) {\n\t\t\ts->input_boost_freq = 1286400;\n\t\t\ts->powerkey_input_boost_freq = 1478400;\n\t\t} else if (cpu <= 6) {\n\t\t\ts->input_boost_freq = 1612800;\n\t\t\ts->powerkey_input_boost_freq = 1804800;\n\t\t} else {\n\t\t\ts->input_boost_freq = 1804800;\n\t\t\ts->powerkey_input_boost_freq = 2054400;\n\t\t}\n/' $CB
+        grep -q "perf: input boost defaults" $CB && echo "  [ok] cpu-boost defaults" || { echo "  [FAIL] cpu-boost insert"; exit 1; }
+    fi
+
+    # 3) 块设备 readahead 128K -> 512K（UFS 顺序读更快）
+    BC=block/blk-core.c
+    if [ -f "$BC" ] && ! grep -q "4 \* VM_MAX_READAHEAD" "$BC"; then
+        perl -0pi -e 's{\tq->backing_dev_info->ra_pages =\n\t\t\t\(VM_MAX_READAHEAD \* 1024\) / PAGE_SIZE;\n\tq->backing_dev_info->io_pages =\n\t\t\t\(VM_MAX_READAHEAD \* 1024\) / PAGE_SIZE;}{\tq->backing_dev_info->ra_pages =\n\t\t\t(4 * VM_MAX_READAHEAD * 1024) / PAGE_SIZE;\n\tq->backing_dev_info->io_pages =\n\t\t\t(4 * VM_MAX_READAHEAD * 1024) / PAGE_SIZE;}' $BC
+        grep -q "4 \* VM_MAX_READAHEAD" $BC && echo "  [ok] readahead 512K" || echo "  [warn] readahead pattern mismatch"
+    fi
+
+    # 4) GPU(KGSL) 初始频率档 290MHz -> 381MHz
+    GD=arch/arm64/boot/dts/vendor/qcom/kona-gpu.dtsi
+    if [ -f "$GD" ]; then
+        sed -i 's/qcom,initial-pwrlevel = <2>;/qcom,initial-pwrlevel = <1>;/' $GD
+        grep -q "qcom,initial-pwrlevel = <1>;" $GD && echo "  [ok] gpu initial pwrlevel" || echo "  [warn] gpu pattern mismatch"
     fi
 else
-    echo "PERF_ENABLE=false：不应用性能补丁"
+    echo "PERF_ENABLE=false：不应用性能调优"
 fi
 
 echo "Cleaning..."
