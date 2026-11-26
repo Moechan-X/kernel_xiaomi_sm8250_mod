@@ -1,4 +1,4 @@
-﻿/*
+/*
  * kallsyms.c: in-kernel printing of symbolic oopses and stack traces.
  *
  * Rewritten and vastly simplified by Rusty Russell for in-kernel
