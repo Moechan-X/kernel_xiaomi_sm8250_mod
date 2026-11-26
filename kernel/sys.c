@@ -198,10 +198,6 @@ out:
 	return error;
 }
 
-#ifdef CONFIG_KSU_SUSFS
-extern bool susfs_is_priority_uid_filtered(uid_t uid);
-#endif // #ifdef CONFIG_KSU_SUSFS
-
 SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
 {
 	struct task_struct *g, *p;
@@ -247,10 +243,6 @@ SYSCALL_DEFINE3(setpriority, int, which, int, who, int, niceval)
 		if (!who)
 			uid = cred->uid;
 		else if (!uid_eq(uid, cred->uid)) {
-#ifdef CONFIG_KSU_SUSFS
-			if (cred->uid.val >= 10000 && susfs_is_priority_uid_filtered(uid.val))
-				goto out_unlock;
-#endif // #ifdef CONFIG_KSU_SUSFS
 			user = find_user(uid);
 			if (!user)
 				goto out_unlock;	/* No processes for this user */
@@ -319,10 +311,6 @@ SYSCALL_DEFINE2(getpriority, int, which, int, who)
 		if (!who)
 			uid = cred->uid;
 		else if (!uid_eq(uid, cred->uid)) {
-#ifdef CONFIG_KSU_SUSFS
-			if (cred->uid.val >= 10000 && susfs_is_priority_uid_filtered(uid.val))
-				goto out_unlock;
-#endif // #ifdef CONFIG_KSU_SUSFS
 			user = find_user(uid);
 			if (!user)
 				goto out_unlock;	/* No processes for this user */
@@ -1253,7 +1241,6 @@ static int override_release(char __user *release, size_t len)
 }
 
 #ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
-extern struct static_key_false susfs_is_uname_spoof_buffer_set;
 extern void susfs_spoof_uname(struct new_utsname* tmp);
 #endif
 SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
@@ -1263,8 +1250,7 @@ SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 	down_read(&uts_sem);
 	memcpy(&tmp, utsname(), sizeof(tmp));
 #ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
-	if (static_branch_likely(&susfs_is_uname_spoof_buffer_set))
-		susfs_spoof_uname(&tmp);
+	susfs_spoof_uname(&tmp);
 #endif
 	up_read(&uts_sem);
 	if (copy_to_user(name, &tmp, sizeof(tmp)))
