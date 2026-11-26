@@ -84,8 +84,22 @@ if [ "${PERF_ENABLE:-true}" = "true" ]; then
         grep -q "4 \* VM_MAX_READAHEAD" $BC && echo "  [ok] readahead 512K" || echo "  [warn] readahead pattern mismatch"
     fi
 
-    # 说明：GPU 初始档、HZ、EAS/schedutil 参数一律保持原厂值，
-    #       以免增加待机/满载功耗（用户要求：流畅省电、稳定不出问题）。
+    # 3) schedutil 适度提频（比原厂略积极，远低于激进值，兼顾流畅与功耗）
+    #    hispeed 门槛 90->85；金核/大核 rtg boost 0 -> 1.3/1.6GHz
+    SU=kernel/sched/cpufreq_schedutil.c
+    if [ -f "$SU" ]; then
+        sed -i 's/^#define DEFAULT_HISPEED_LOAD 90$/#define DEFAULT_HISPEED_LOAD 85/' $SU
+        sed -i 's/^#define DEFAULT_CPU4_RTG_BOOST_FREQ 0$/#define DEFAULT_CPU4_RTG_BOOST_FREQ 1324800/' $SU
+        sed -i 's/^#define DEFAULT_CPU7_RTG_BOOST_FREQ 0$/#define DEFAULT_CPU7_RTG_BOOST_FREQ 1612800/' $SU
+        grep -q "DEFAULT_HISPEED_LOAD 85" $SU && echo "  [ok] schedutil mild boost" || echo "  [warn] schedutil pattern mismatch"
+    fi
+
+    # 4) GPU idle-timeout 80->50ms（更快拉到目标频率，减少掉帧；不抬高上限故不增满载功耗）
+    GD=arch/arm64/boot/dts/vendor/qcom/kona-gpu.dtsi
+    if [ -f "$GD" ]; then
+        sed -i 's/qcom,idle-timeout = <80>;/qcom,idle-timeout = <50>;/' $GD
+        grep -q "qcom,idle-timeout = <50>;" $GD && echo "  [ok] gpu idle-timeout 50ms" || echo "  [warn] gpu idle-timeout mismatch"
+    fi
 else
     echo "PERF_ENABLE=false：不应用性能调优"
 fi
