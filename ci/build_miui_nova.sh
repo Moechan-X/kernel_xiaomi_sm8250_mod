@@ -139,6 +139,17 @@ sed -i 's/\/\/39 01 00 00 00 00 05 51 07 FF 00 00/39 01 00 00 00 00 05 51 07 FF 
 sed -i 's/\/\/39 01 00 00 01 00 03 51 03 FF/39 01 00 00 01 00 03 51 03 FF/g' ${dts_source}/dsi-panel-j11-38-08-0a-fhd-cmd.dtsi
 sed -i 's/\/\/39 01 00 00 11 00 03 51 03 FF/39 01 00 00 11 00 03 51 03 FF/g' ${dts_source}/dsi-panel-j2-p2-1-38-0c-0a-dsc-cmd.dtsi
 
+# 崩溃日志：pstore/ramoops（在 dtb 预留 1MB，panic 后可从 /sys/fs/pstore 取调用栈）
+if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
+    for f in arch/arm64/boot/dts/vendor/qcom/kona*.dts arch/arm64/boot/dts/vendor/qcom/kona*.dtsi; do
+        [ -f "$f" ] || continue
+        grep -q "ramoops_region" "$f" && continue
+        grep -q "reserved-memory {" "$f" || continue
+        awk '{print} /reserved-memory \{/{printf "\t\tramoops_mem: ramoops_region@9fe00000 {\n\t\t\tcompatible = \"ramoops\";\n\t\t\treg = <0x0 0x9fe00000 0x0 0x100000>;\n\t\t\trecord-size = <0x20000>;\n\t\t\tconsole-size = <0x60000>;\n\t\t\tpmsg-size = <0x20000>;\n\t\t\tno-map;\n\t\t};\n"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        echo "pstore: injected ramoops node into $f"
+    done
+fi
+
 make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
 # SukiSU Nova: KSU + SUSFS v2.3.0 + KPM（可用环境变量裁剪，便于二分定位）
 if [ "$KSU_ENABLE" = "true" ]; then
@@ -210,6 +221,9 @@ scripts/config --file out/.config \
     -e RTMM
 # Nova 面向新内核，4.19 上会有若干“仅告警”级别的差异，降级为 warning
 KCFLAGS="-Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=misleading-indentation -Wno-error=address-of-packed-member -Wno-unknown-warning-option"
+if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
+    scripts/config --file out/.config -e PSTORE -e PSTORE_RAM -e PSTORE_CONSOLE -e PSTORE_PMSG -e PSTORE_FTRACE
+fi
 make $MAKE_ARGS KCFLAGS="$KCFLAGS" -j$(nproc)
 
 if [ ! -f "out/arch/arm64/boot/Image" ]; then
