@@ -39,6 +39,8 @@ fi
 sed -i '/#include <linux\/static_call.h>/d' KernelSU/kernel/kernel_includes.h
 # 4.19 的 access_ok 仍是三参数形式 (type, addr, size)
 sed -i 's/access_ok(u64_to_user_ptr(cmd.result_code), sizeof(result))/access_ok(VERIFY_WRITE, u64_to_user_ptr(cmd.result_code), sizeof(result))/' KernelSU/kernel/extension/kpm/kpm.c
+# sulog 里误用了 5.8+ 才有的 strncpy_from_user_nofault，改用 Nova 自带的兼容封装
+sed -i 's/^\(\s*\)strncpy_from_user_nofault(arg,/\1ksu_strncpy_from_user_nofault(arg,/' KernelSU/kernel/sulog/event.c
 ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
 grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
 grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
