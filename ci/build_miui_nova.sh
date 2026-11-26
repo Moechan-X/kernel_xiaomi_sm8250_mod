@@ -164,21 +164,14 @@ if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
 fi
 
 make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
-# SukiSU-Nova (builtin-new)：KSU + 树内 SUSFS(v1.5.7 API) + KPM，需 KPROBES
+# SukiSU-Nova (builtin-new)：先只开内核核心 + KPM（需 KPROBES）。
+# 注意：builtin-new 的 supercall 期望 SUSFS v2.x（SUSFS_MAGIC/ADD_SUS_MAP 等），
+# 而当前树内是 v1.5.7；故先关闭 KSU_SUSFS 以保证编译与开机（Nova 自带的
+# mount_hide/sucompat 等隐藏仍然生效）。确认可用后再单独升级树内 SUSFS 到 v2.x。
 if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     scripts/config --file out/.config \
     -e KSU \
-    -e KSU_SUSFS \
-    -e KSU_SUSFS_INLINE_HOOK \
-    -e KSU_SUSFS_SUS_PATH \
-    -e KSU_SUSFS_SUS_MOUNT \
-    -e KSU_SUSFS_SUS_KSTAT \
-    -e KSU_SUSFS_SPOOF_UNAME \
-    -e KSU_SUSFS_ENABLE_LOG \
-    -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-    -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-    -e KSU_SUSFS_OPEN_REDIRECT \
-    -e KSU_SUSFS_SUS_MAP \
+    -d KSU_SUSFS \
     -e KPM \
     -e KPROBES
 # SukiSU-Ultra: KSU(MANUAL_HOOK) + SUSFS(树内) + KPM —— 与上游 build.sh 逐项一致
