@@ -56,6 +56,24 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
     echo "SukiSU-Nova (builtin-new) integrated."
+
+    # 恢复完整 SUSFS v2.x：从 fork 历史 commit 取 SUSFS 相关文件（该 commit 的树是
+    # SUSFS v2.3.0，正好满足 builtin-new 的 supercall 期望，例如 SUSFS_MAGIC/ADD_SUS_MAP）
+    if [ "${SUSFS_ENABLE:-true}" = "true" ]; then
+        SUSFS_SRC=3917fc9cd8a43b0b842013a5ee33bc990c093d63
+        git fetch --depth=1 origin "$SUSFS_SRC" 2>/dev/null || true
+        if git cat-file -e "$SUSFS_SRC^{commit}" 2>/dev/null; then
+            echo "Restoring SUSFS v2.x files from $SUSFS_SRC ..."
+            git checkout "$SUSFS_SRC" -- \
+                fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h \
+                fs/namei.c fs/namespace.c fs/stat.c fs/open.c fs/read_write.c \
+                fs/mount.h kernel/sys.c kernel/reboot.c \
+                fs/proc/base.c fs/proc/task_mmu.c fs/proc/fd.c 2>/dev/null || true
+            echo "  changed files: $(git status --porcelain | wc -l)"
+        else
+            echo "  [warn] SUSFS source commit unavailable; building without SUSFS"
+        fi
+    fi
 elif [ "$KSU_ENABLE" = "true" ]; then
     echo "Applying SukiSU-Ultra (kernel commit f4863b20)..."
     curl -LSs "https://github.com/liyafe1997/SukiSU-Ultra/raw/4ff14cf0051d04209c4abd5027d99d8e7780ef5b/kernel/setup.sh" | bash -s f4863b20cc8dc0f8cc67418980f022e43014b598
@@ -183,13 +201,36 @@ make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
 # 而当前树内是 v1.5.7；故先关闭 KSU_SUSFS 以保证编译与开机（Nova 自带的
 # mount_hide/sucompat 等隐藏仍然生效）。确认可用后再单独升级树内 SUSFS 到 v2.x。
 if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
-    scripts/config --file out/.config \
-    -e KSU \
-    -e KSU_TAMPER_SYSCALL_TABLE \
-    -e KSU_LSM_SECURITY_HOOKS \
-    -d KSU_SUSFS \
-    -e KPM \
-    -e KPROBES
+    if [ "${SUSFS_ENABLE:-true}" = "true" ] && grep -q "SUSFS_MAGIC" include/linux/susfs_def.h 2>/dev/null; then
+        echo "Enabling KSU_SUSFS (v2.x detected)"
+        scripts/config --file out/.config \
+        -e KSU \
+        -e KSU_TAMPER_SYSCALL_TABLE \
+        -e KSU_LSM_SECURITY_HOOKS \
+        -e KSU_SUSFS \
+        -e KSU_SUSFS_INLINE_HOOK \
+        -e KSU_SUSFS_SUS_PATH \
+        -e KSU_SUSFS_SUS_MOUNT \
+        -e KSU_SUSFS_SUS_KSTAT \
+        -e KSU_SUSFS_SPOOF_UNAME \
+        -e KSU_SUSFS_ENABLE_LOG \
+        -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+        -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+        -e KSU_SUSFS_OPEN_REDIRECT \
+        -e KSU_SUSFS_SUS_MAP \
+        -e KSU_SUSFS_PRIORITY_UID_FILTER \
+        -e KPM \
+        -e KPROBES
+    else
+        echo "SUSFS v2.x not present; building Nova without KSU_SUSFS"
+        scripts/config --file out/.config \
+        -e KSU \
+        -e KSU_TAMPER_SYSCALL_TABLE \
+        -e KSU_LSM_SECURITY_HOOKS \
+        -d KSU_SUSFS \
+        -e KPM \
+        -e KPROBES
+    fi
 # SukiSU-Ultra: KSU(MANUAL_HOOK) + SUSFS(树内) + KPM —— 与上游 build.sh 逐项一致
 elif [ "$KSU_ENABLE" = "true" ]; then
     scripts/config --file out/.config \
