@@ -10,6 +10,9 @@ TOOLCHAIN_PATH=${TOOLCHAIN_PATH:-$HOME/proton-clang/proton-clang-20210522/bin}
 KSU_ENABLE=${KSU_ENABLE:-true}
 SUSFS_ENABLE=${SUSFS_ENABLE:-true}
 KPM_ENABLE=${KPM_ENABLE:-true}
+# Root 实现：ultra = SukiSU-Ultra(旧实现, 手动 hook + 树内 SUSFS)
+#            nova = SukiSU-Nova(新实现, syscall hook + 自带隐藏, 管理器包名 com.sukisu.nova)
+KSU_MODE=${KSU_MODE:-ultra}
 GIT_COMMIT_ID=$(git rev-parse --short=8 HEAD)
 
 if [ ! -d "$TOOLCHAIN_PATH" ]; then
@@ -34,11 +37,24 @@ export PATH="/usr/lib/ccache:$PATH"
 
 MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
 
-# ---------------- SukiSU (Ultra) ----------------
-# 与上游 liyafe1997 官方包完全一致：SukiSU-Ultra 固定 commit 注入内核树，
-# 树内已自带的 SUSFS + 手动 hook 调用点，KPM 用 SukiSU-Ultra 0.12.0 补丁。
-# 这是作者在 dagu(HyperOS2.0/Android14) 上验证可开机、可 root 的组合。
-if [ "$KSU_ENABLE" = "true" ]; then
+# ---------------- SukiSU (Ultra / Nova) ----------------
+if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
+    # SukiSU-Nova：新架构（syscall hook + patch_memory），自带 mount_hide/sucompat 等隐藏功能，
+    # 不使用树内 fs/susfs.c（它只受 CONFIG_KSU_SUSFS 控制，Nova 无该开关故不会编译）。
+    # 树内为 Ultra 手动 hook 预留的 ksu_handle_* 调用点在 Nova 下必须排除，
+    # 否则会出现未定义符号（Nova 不提供这些函数），这里用 KSU_NOVA_MODE 宏门控。
+    echo "Preparing tree for SukiSU-Nova (guard Ultra manual-hook call sites)..."
+    for f in fs/exec.c fs/open.c fs/stat.c fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
+        [ -f "$f" ] && sed -i 's/^#ifdef CONFIG_KSU$/#if defined(CONFIG_KSU) \&\& !defined(KSU_NOVA_MODE)/' "$f"
+    done
+    echo "Cloning SukiSU-Nova (main)..."
+    rm -rf KernelSU
+    git clone --depth=1 https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
+    ln -sf "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
+    grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+    grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+    echo "SukiSU-Nova integrated."
+elif [ "$KSU_ENABLE" = "true" ]; then
     echo "Applying SukiSU-Ultra (kernel commit f4863b20)..."
     curl -LSs "https://github.com/liyafe1997/SukiSU-Ultra/raw/4ff14cf0051d04209c4abd5027d99d8e7780ef5b/kernel/setup.sh" | bash -s f4863b20cc8dc0f8cc67418980f022e43014b598
 else
@@ -158,8 +174,15 @@ if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
 fi
 
 make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
+# SukiSU-Nova：KSU + KSU_MANUAL_SU + KPM，无 KSU_SUSFS_*（Nova 自带隐藏），需 KPROBES
+if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
+    scripts/config --file out/.config \
+    -e KSU \
+    -e KSU_MANUAL_SU \
+    -e KPM \
+    -e KPROBES
 # SukiSU-Ultra: KSU(MANUAL_HOOK) + SUSFS(树内) + KPM —— 与上游 build.sh 逐项一致
-if [ "$KSU_ENABLE" = "true" ]; then
+elif [ "$KSU_ENABLE" = "true" ]; then
     scripts/config --file out/.config \
     -e KSU \
     -e KSU_MANUAL_HOOK \
@@ -228,6 +251,10 @@ if [ "${PERF_ENABLE:-true}" = "true" ]; then
 fi
 # Nova 面向新内核，4.19 上会有若干“仅告警”级别的差异，降级为 warning
 KCFLAGS="-Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=misleading-indentation -Wno-error=address-of-packed-member -Wno-unknown-warning-option"
+# Nova 模式：定义 KSU_NOVA_MODE，使树内 Ultra 的手动 hook 调用点被排除
+if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
+    KCFLAGS="$KCFLAGS -DKSU_NOVA_MODE"
+fi
 if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
     scripts/config --file out/.config -e PSTORE -e PSTORE_RAM -e PSTORE_CONSOLE -e PSTORE_PMSG -e PSTORE_FTRACE
 fi
@@ -246,8 +273,10 @@ mv .dts.bak ${dts_source}
 rm -rf anykernel/kernels/
 mkdir -p anykernel/kernels/
 
-# KPM 支持：对 Image 打 patch（与上游一致：SukiSU-Ultra 0.12.0）
-if [ "$KSU_ENABLE" = "true" ] && [ "$KPM_ENABLE" = "true" ]; then
+# KPM 支持：
+#  - Ultra：对 Image 打 patch（SukiSU-Ultra 0.12.0）
+#  - Nova ：KPM 已编译进 kernelsu.o，无需 patch_linux
+if [ "$KSU_ENABLE" = "true" ] && [ "$KPM_ENABLE" = "true" ] && [ "$KSU_MODE" != "nova" ]; then
 cd out/arch/arm64/boot/
 wget -q https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
 chmod +x patch_linux
@@ -256,7 +285,7 @@ rm Image
 mv oImage Image
 cd -
 else
-echo "跳过 KPM Image patch (KSU_ENABLE=$KSU_ENABLE KPM_ENABLE=$KPM_ENABLE)"
+echo "跳过 KPM Image patch (KSU_ENABLE=$KSU_ENABLE KPM_ENABLE=$KPM_ENABLE KSU_MODE=$KSU_MODE)"
 fi
 
 cp out/arch/arm64/boot/Image anykernel/kernels/
@@ -265,7 +294,9 @@ cp out/arch/arm64/boot/dtb anykernel/kernels/
 sed -i "s/-$(date +%Y%m%d)-${GIT_COMMIT_ID}-perf/-perf/g" arch/arm64/configs/${TARGET_DEVICE}_defconfig
 
 cd anykernel
-ZIP_FILENAME=Kernel_MIUI_${TARGET_DEVICE}_SukiSU-Nova${VARIANT}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip
+KSU_BRAND="Ultra"
+[ "$KSU_MODE" = "nova" ] && KSU_BRAND="Nova"
+ZIP_FILENAME=Kernel_MIUI_${TARGET_DEVICE}_SukiSU-${KSU_BRAND}${VARIANT}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip
 zip -r9 $ZIP_FILENAME ./* -x .git .gitignore out/ ./*.zip
 mv $ZIP_FILENAME ../
 cd ..
