@@ -76,6 +76,22 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
             echo "$ALL_FILES" | while read -r f; do
                 [ -n "$f" ] && git cat-file -e "$SUSFS_SRC:$f" 2>/dev/null && git checkout "$SUSFS_SRC" -- "$f" 2>/dev/null
             done
+            # builtin-new 的 ksu.c 引用了 SUSFS v2.4 才有的两个函数，v2.3.0 未实现，补桩避免链接失败
+            if [ -f fs/susfs.c ] && ! grep -q "susfs_add_sus_type" fs/susfs.c; then
+                cat >> fs/susfs.c <<'SUSFS_SHIM_EOF'
+
+/* v2.4 compat shims for SukiSU-Nova builtin-new */
+int susfs_add_sus_type(void *user_info)
+{
+	return -EINVAL;
+}
+int susfs_parse_sus_path_app_strings(char *app_strings)
+{
+	return 0;
+}
+SUSFS_SHIM_EOF
+                echo "  added v2.4 compat shims to fs/susfs.c"
+            fi
             echo "  changed files: $(git status --porcelain | wc -l)"
         else
             echo "  [warn] SUSFS source commit unavailable; building without SUSFS"
