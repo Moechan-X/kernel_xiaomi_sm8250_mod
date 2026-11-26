@@ -23,6 +23,10 @@ on:
         description: "启用 KPM + Image patch (true/false)"
         required: false
         default: "true"
+      pstore:
+        description: "启用 pstore/ramoops 崩溃日志 (true/false)"
+        required: false
+        default: "false"
 
 permissions:
   contents: write
@@ -55,7 +59,8 @@ jobs:
           SUSFS_ENABLE: ${{ github.event.inputs.susfs || 'true' }}
           KPM_ENABLE: ${{ github.event.inputs.kpm || 'true' }}
           SUSFS_MIN: ${{ github.event.inputs.susfs_min || 'false' }}
-          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.susfs_min == 'true' && '_susfsmin' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}
+          PSTORE_ENABLE: ${{ github.event.inputs.pstore || 'false' }}
+          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.susfs_min == 'true' && '_susfsmin' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}${{ github.event.inputs.pstore == 'true' && '_pstore' || '' }}
         run: |
           chmod +x ci/build_miui_nova.sh
           bash ci/build_miui_nova.sh
