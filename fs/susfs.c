@@ -2007,3 +2007,11 @@ void susfs_init(void) {\
 /* No module exit is needed becuase it should never be a loadable kernel module */
 //void __init susfs_exit(void)
 
+/* Compatibility shim for SukiSU-Nova: newer SUSFS tracks avtab allow bits
+ * when KSU rewrites selinux policy. SUSFS v2.3.0 does not need this
+ * bookkeeping, so accept and ignore the call. */
+int susfs_add_sus_avd_allowed_by_type(u32 s_type, u32 t_type, u16 type, u32 orig_avd_allowed)
+{
+	(void)s_type; (void)t_type; (void)type; (void)orig_avd_allowed;
+	return 0;
+}
