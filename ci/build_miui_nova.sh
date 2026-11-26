@@ -39,38 +39,23 @@ MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-g
 
 # ---------------- SukiSU (Ultra / Nova) ----------------
 if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
-    # SukiSU-Nova：新架构（syscall hook + patch_memory），自带 mount_hide/sucompat 等隐藏功能，
-    # 不使用树内 fs/susfs.c（它只受 CONFIG_KSU_SUSFS 控制，Nova 无该开关故不会编译）。
-    # 树内为 Ultra 手动 hook 预留的 ksu_handle_* 调用点在 Nova 下必须排除，
-    # 否则会出现未定义符号（Nova 不提供这些函数），这里用 KSU_NOVA_MODE 宏门控。
-    echo "Preparing tree for SukiSU-Nova (guard Ultra manual-hook call sites)..."
-    for f in fs/exec.c fs/open.c fs/stat.c fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
+    # SukiSU-Nova 的 builtin-new 分支：专为"内置进内核树"设计，自带 4.14+ 兼容层
+    # （自动探测 selinux_state / strscpy / probe_kernel_* / TWA_RESUME 等新 API，
+    #   缺失时回退老实现；Kbuild 还会读取树内 susfs.h 的 SUSFS_VERSION）。
+    # 它的 sucompat 提供与树内完全同名的 ksu_handle_execveat/faccessat/stat，
+    # 因此 fs/exec.c、fs/open.c、fs/stat.c 的调用点可直接复用（保留）。
+    # input/read_write/pty 的调用点 builtin-new 未必提供，用 KSU_NOVA_MODE 排除以防未定义符号。
+    echo "Guarding optional hook call sites for Nova..."
+    for f in fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
         [ -f "$f" ] && sed -i 's/^#ifdef CONFIG_KSU$/#if defined(CONFIG_KSU) \&\& !defined(KSU_NOVA_MODE)/' "$f"
     done
-    echo "Cloning SukiSU-Nova (main)..."
+    echo "Cloning SukiSU-Nova (builtin-new)..."
     rm -rf KernelSU
-    git clone --depth=1 https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
-    # 4.19 兼容修正（这些头/宏都是更高版本才拆出的）：
-    #  - MODULE_IMPORT_NS        5.4+
-    #  - linux/pgtable.h         5.4+（4.19 用 asm/pgtable.h）
-    #  - linux/hex.h             5.5+（hex_to_bin 在 linux/kernel.h）
-    #  - linux/bsearch.h         5.2+（bsearch 在 linux/kernel.h）
-    grep -rl "MODULE_IMPORT_NS" KernelSU/kernel 2>/dev/null | xargs -r sed -i '/MODULE_IMPORT_NS/d'
-    grep -rl "linux/pgtable.h" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's|linux/pgtable.h|asm/pgtable.h|'
-    grep -rl "linux/hex.h" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's|linux/hex.h|linux/kernel.h|'
-    grep -rl "linux/bsearch.h" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's|linux/bsearch.h|linux/kernel.h|'
-    # 4.19 缺失的函数/枚举 → 等价旧 API：
-    #  - strncpy_from_user_nofault (5.8+) -> strncpy_from_unsafe_user（签名一致）
-    #  - copy_from_user_nofault / copy_to_user_nofault (5.8+) -> probe_kernel_read / probe_kernel_write
-    #  - TWA_RESUME (5.9+) -> true（4.19 的 task_work_add 第三参是 bool notify）
-    grep -rl "strncpy_from_user_nofault" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's/strncpy_from_user_nofault/strncpy_from_unsafe_user/g'
-    grep -rl "copy_from_user_nofault" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's/copy_from_user_nofault/probe_kernel_read/g'
-    grep -rl "copy_to_user_nofault" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's/copy_to_user_nofault/probe_kernel_write/g'
-    grep -rl "TWA_RESUME" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's/TWA_RESUME/true/g'
+    git clone --depth=1 -b builtin-new https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
     ln -sf "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
     grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-    echo "SukiSU-Nova integrated."
+    echo "SukiSU-Nova (builtin-new) integrated."
 elif [ "$KSU_ENABLE" = "true" ]; then
     echo "Applying SukiSU-Ultra (kernel commit f4863b20)..."
     curl -LSs "https://github.com/liyafe1997/SukiSU-Ultra/raw/4ff14cf0051d04209c4abd5027d99d8e7780ef5b/kernel/setup.sh" | bash -s f4863b20cc8dc0f8cc67418980f022e43014b598
@@ -179,11 +164,21 @@ if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
 fi
 
 make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
-# SukiSU-Nova：KSU + KSU_MANUAL_SU + KPM，无 KSU_SUSFS_*（Nova 自带隐藏），需 KPROBES
+# SukiSU-Nova (builtin-new)：KSU + 树内 SUSFS(v1.5.7 API) + KPM，需 KPROBES
 if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     scripts/config --file out/.config \
     -e KSU \
-    -e KSU_MANUAL_SU \
+    -e KSU_SUSFS \
+    -e KSU_SUSFS_INLINE_HOOK \
+    -e KSU_SUSFS_SUS_PATH \
+    -e KSU_SUSFS_SUS_MOUNT \
+    -e KSU_SUSFS_SUS_KSTAT \
+    -e KSU_SUSFS_SPOOF_UNAME \
+    -e KSU_SUSFS_ENABLE_LOG \
+    -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+    -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+    -e KSU_SUSFS_OPEN_REDIRECT \
+    -e KSU_SUSFS_SUS_MAP \
     -e KPM \
     -e KPROBES
 # SukiSU-Ultra: KSU(MANUAL_HOOK) + SUSFS(树内) + KPM —— 与上游 build.sh 逐项一致
