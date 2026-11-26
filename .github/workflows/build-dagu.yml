@@ -15,6 +15,10 @@ on:
         description: "启用 SUSFS (true/false)"
         required: false
         default: "true"
+      susfs_min:
+        description: "SUSFS 最小化（只留框架，关全部子功能）"
+        required: false
+        default: "false"
       kpm:
         description: "启用 KPM + Image patch (true/false)"
         required: false
@@ -50,7 +54,8 @@ jobs:
           KSU_ENABLE: ${{ github.event.inputs.ksu || 'true' }}
           SUSFS_ENABLE: ${{ github.event.inputs.susfs || 'true' }}
           KPM_ENABLE: ${{ github.event.inputs.kpm || 'true' }}
-          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}
+          SUSFS_MIN: ${{ github.event.inputs.susfs_min || 'false' }}
+          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.susfs_min == 'true' && '_susfsmin' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}
         run: |
           chmod +x ci/build_miui_nova.sh
           bash ci/build_miui_nova.sh
