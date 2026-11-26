@@ -1,0 +1,19 @@
+--- a/drivers/cpufreq/cpu-boost.c
++++ b/drivers/cpufreq/cpu-boost.c
+@@ -489,6 +489,15 @@ static int cpu_boost_init(void)
+ 	for_each_possible_cpu(cpu) {
+ 		s = &per_cpu(sync_info, cpu);
+ 		s->cpu = cpu;
++		/* 默认触控 boost 频率（银/金/大核三档），MIUI perf 接管前即生效 */
++		if (cpu <= 3) {
++			s->input_boost_freq = 1286400;
++			s->powerkey_input_boost_freq = 1478400;
++		} else if (cpu <= 6) {
++			s->input_boost_freq = 1612800;
++			s->powerkey_input_boost_freq = 1804800;
++		} else {
++			s->input_boost_freq = 1804800;
++			s->powerkey_input_boost_freq = 2054400;
++		}
+ 	}
+ 	cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
