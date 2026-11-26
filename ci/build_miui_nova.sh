@@ -104,11 +104,22 @@ sed -i 's/\/\/39 01 00 00 01 00 03 51 03 FF/39 01 00 00 01 00 03 51 03 FF/g' ${d
 sed -i 's/\/\/39 01 00 00 11 00 03 51 03 FF/39 01 00 00 11 00 03 51 03 FF/g' ${dts_source}/dsi-panel-j2-p2-1-38-0c-0a-dsc-cmd.dtsi
 
 make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
-# SukiSU Nova: KSU + KPM（SUSFS 需要内核侧 v2 补丁，暂不开启）
+# SukiSU Nova: KSU + SUSFS v2.3.0 + KPM
 scripts/config --file out/.config \
     -e KSU \
+    -e KSU_SUSFS \
+    -e KSU_SUSFS_SUS_PATH \
+    -e KSU_SUSFS_SUS_MOUNT \
+    -e KSU_SUSFS_SUS_KSTAT \
+    -e KSU_SUSFS_SPOOF_UNAME \
+    -e KSU_SUSFS_ENABLE_LOG \
+    -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+    -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+    -e KSU_SUSFS_OPEN_REDIRECT \
+    -e KSU_SUSFS_SUS_MAP \
+    -e KSU_SUSFS_PRIORITY_UID_FILTER \
     -e KPM
-scripts/config --file out/.config -d KSU_SUSFS
+scripts/config --file out/.config -d KSU_SUSFS_SUS_SU
 # MIUI 专用配置
 scripts/config --file out/.config \
     --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
