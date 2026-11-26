@@ -64,11 +64,12 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
         git fetch --depth=1 origin "$SUSFS_SRC" 2>/dev/null || true
         if git cat-file -e "$SUSFS_SRC^{commit}" 2>/dev/null; then
             echo "Restoring SUSFS v2.x files from $SUSFS_SRC ..."
-            git checkout "$SUSFS_SRC" -- \
-                fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h \
-                fs/namei.c fs/namespace.c fs/stat.c fs/open.c fs/read_write.c \
-                fs/mount.h kernel/sys.c kernel/reboot.c \
-                fs/proc/base.c fs/proc/task_mmu.c fs/proc/fd.c 2>/dev/null || true
+            # 自动发现该 commit 里所有引用 susfs 的源文件，统一替换，保证 SUSFS 代码与宏定义版本一致
+            SUSFS_FILES=$(git grep -l -i "susfs" "$SUSFS_SRC" -- fs include kernel mm drivers 2>/dev/null | sed "s|^$SUSFS_SRC:||")
+            echo "  susfs-related files: $(echo "$SUSFS_FILES" | wc -l)"
+            echo "$SUSFS_FILES" | while read -r f; do
+                [ -n "$f" ] && git checkout "$SUSFS_SRC" -- "$f" 2>/dev/null
+            done
             echo "  changed files: $(git status --porcelain | wc -l)"
         else
             echo "  [warn] SUSFS source commit unavailable; building without SUSFS"
