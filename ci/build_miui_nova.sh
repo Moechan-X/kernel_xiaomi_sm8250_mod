@@ -6,6 +6,10 @@ set -e
 
 TARGET_DEVICE=${TARGET_DEVICE:-dagu}
 TOOLCHAIN_PATH=${TOOLCHAIN_PATH:-$HOME/proton-clang/proton-clang-20210522/bin}
+# 定位用开关：KSU_ENABLE=false 出纯原版基线包；KPM_ENABLE=false 跳过 Image patch
+KSU_ENABLE=${KSU_ENABLE:-true}
+SUSFS_ENABLE=${SUSFS_ENABLE:-true}
+KPM_ENABLE=${KPM_ENABLE:-true}
 GIT_COMMIT_ID=$(git rev-parse --short=8 HEAD)
 
 if [ ! -d "$TOOLCHAIN_PATH" ]; then
@@ -32,6 +36,7 @@ MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-g
 
 # ---------------- SukiSU Nova ----------------
 # builtin 分支：不依赖 kprobe，使用内核源码里已有的手动 hook（本内核源码自带）
+if [ "$KSU_ENABLE" = "true" ]; then
 if [ ! -d KernelSU ]; then
     git clone --depth=1 -b builtin https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
 fi
@@ -44,6 +49,9 @@ sed -i 's/^\(\s*\)strncpy_from_user_nofault(arg,/\1ksu_strncpy_from_user_nofault
 ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
 grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
 grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+else
+echo "KSU_ENABLE=false：构建纯原版基线（不集成 KernelSU）"
+fi
 
 echo "Cleaning..."
 rm -rf out/
@@ -106,22 +114,32 @@ sed -i 's/\/\/39 01 00 00 01 00 03 51 03 FF/39 01 00 00 01 00 03 51 03 FF/g' ${d
 sed -i 's/\/\/39 01 00 00 11 00 03 51 03 FF/39 01 00 00 11 00 03 51 03 FF/g' ${dts_source}/dsi-panel-j2-p2-1-38-0c-0a-dsc-cmd.dtsi
 
 make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
-# SukiSU Nova: KSU + SUSFS v2.3.0 + KPM
-scripts/config --file out/.config \
-    -e KSU \
-    -e KSU_SUSFS \
-    -e KSU_SUSFS_SUS_PATH \
-    -e KSU_SUSFS_SUS_MOUNT \
-    -e KSU_SUSFS_SUS_KSTAT \
-    -e KSU_SUSFS_SPOOF_UNAME \
-    -e KSU_SUSFS_ENABLE_LOG \
-    -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-    -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-    -e KSU_SUSFS_OPEN_REDIRECT \
-    -e KSU_SUSFS_SUS_MAP \
-    -e KSU_SUSFS_PRIORITY_UID_FILTER \
-    -e KPM
-scripts/config --file out/.config -d KSU_SUSFS_SUS_SU
+# SukiSU Nova: KSU + SUSFS v2.3.0 + KPM（可用环境变量裁剪，便于二分定位）
+if [ "$KSU_ENABLE" = "true" ]; then
+    scripts/config --file out/.config -e KSU
+    if [ "$SUSFS_ENABLE" = "true" ]; then
+        scripts/config --file out/.config \
+            -e KSU_SUSFS \
+            -e KSU_SUSFS_SUS_PATH \
+            -e KSU_SUSFS_SUS_MOUNT \
+            -e KSU_SUSFS_SUS_KSTAT \
+            -e KSU_SUSFS_SPOOF_UNAME \
+            -e KSU_SUSFS_ENABLE_LOG \
+            -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+            -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+            -e KSU_SUSFS_OPEN_REDIRECT \
+            -e KSU_SUSFS_SUS_MAP \
+            -e KSU_SUSFS_PRIORITY_UID_FILTER
+    else
+        scripts/config --file out/.config -d KSU_SUSFS
+    fi
+    if [ "$KPM_ENABLE" = "true" ]; then
+        scripts/config --file out/.config -e KPM
+    else
+        scripts/config --file out/.config -d KPM
+    fi
+    scripts/config --file out/.config -d KSU_SUSFS_SUS_SU
+fi
 # MIUI 专用配置
 scripts/config --file out/.config \
     --set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
@@ -169,6 +187,7 @@ rm -rf anykernel/kernels/
 mkdir -p anykernel/kernels/
 
 # KPM 支持：对 Image 打 patch
+if [ "$KSU_ENABLE" = "true" ] && [ "$KPM_ENABLE" = "true" ]; then
 cd out/arch/arm64/boot/
 wget -q https://github.com/SukiSU-Nova/SukiSU_KernelPatch_patch/releases/download/0.14.0/patch_linux
 chmod +x patch_linux
@@ -176,6 +195,9 @@ chmod +x patch_linux
 rm Image
 mv oImage Image
 cd -
+else
+echo "跳过 KPM Image patch (KSU_ENABLE=$KSU_ENABLE KPM_ENABLE=$KPM_ENABLE)"
+fi
 
 cp out/arch/arm64/boot/Image anykernel/kernels/
 cp out/arch/arm64/boot/dtb anykernel/kernels/
@@ -183,7 +205,7 @@ cp out/arch/arm64/boot/dtb anykernel/kernels/
 sed -i "s/-$(date +%Y%m%d)-${GIT_COMMIT_ID}-perf/-perf/g" arch/arm64/configs/${TARGET_DEVICE}_defconfig
 
 cd anykernel
-ZIP_FILENAME=Kernel_MIUI_${TARGET_DEVICE}_SukiSU-Nova_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip
+ZIP_FILENAME=Kernel_MIUI_${TARGET_DEVICE}_SukiSU-Nova${VARIANT}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip
 zip -r9 $ZIP_FILENAME ./* -x .git .gitignore out/ ./*.zip
 mv $ZIP_FILENAME ../
 cd ..
