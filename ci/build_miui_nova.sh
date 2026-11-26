@@ -1,7 +1,7 @@
 #!/bin/bash
 # Xiaomi Pad 5 Pro 12.4 (dagu) - MIUI/HyperOS 内核构建脚本
-# 基于 liyafe1997/kernel_xiaomi_sm8250_mod 的 build.sh MIUI 分支逻辑，
-# 将 KernelSU 替换为 SukiSU Nova (builtin 分支 / 手动 hook 模式)
+# 复刻上游 liyafe1997 build.sh 的 MIUI 分支：SukiSU-Ultra + SUSFS(树内) + KPM 0.12.0
+# 这是作者在 dagu (HyperOS 2.0 / Android 14) 上验证过可开机、可 root 的官方组合
 set -e
 
 TARGET_DEVICE=${TARGET_DEVICE:-dagu}
@@ -34,49 +34,15 @@ export PATH="/usr/lib/ccache:$PATH"
 
 MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
 
-# ---------------- SukiSU Nova ----------------
-# builtin-new 分支：面向 3.10~7.1 的 downstream 内核，自带 4.19 兼容层
-# （kernel_compat.h 提供 strncpy_from_user_nofault / 三参数 access_ok 等 shim，
-#   sucompat 走 ARM64 inline branch-link hook，无需源码里保留手动 hook）
+# ---------------- SukiSU (Ultra) ----------------
+# 与上游 liyafe1997 官方包完全一致：SukiSU-Ultra 固定 commit 注入内核树，
+# 树内已自带的 SUSFS + 手动 hook 调用点，KPM 用 SukiSU-Ultra 0.12.0 补丁。
+# 这是作者在 dagu(HyperOS2.0/Android14) 上验证可开机、可 root 的组合。
 if [ "$KSU_ENABLE" = "true" ]; then
-if [ ! -d KernelSU ]; then
-    git clone --depth=1 -b builtin-new https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
-fi
-# 本内核源码已内置 SukiSU 风格的手动 hook 调用点，它们用这三个全局开关变量门控；
-# Nova builtin-new 内部只用 static 副本，这里在 kernel/ 下补全局定义（默认开启）
-cat > kernel/ksu_hooks_global.c <<'EOF'
-#include <linux/types.h>
-#include <linux/cache.h>
-
-bool ksu_execveat_hook __read_mostly = true;
-bool ksu_vfs_read_hook __read_mostly = true;
-bool ksu_input_hook __read_mostly = true;
-EOF
-grep -q "ksu_hooks_global" kernel/Makefile || echo "obj-y += ksu_hooks_global.o" >> kernel/Makefile
-# Nova 的 supercall 引用了 SUSFS v2.4+ 才有的 CMD_SUSFS_SET_SUS_PATH_UID_FILTER，
-# 内核里的 SUSFS 是 v2.3.0，去掉这分支（只影响按 uid 隐藏路径的过滤，不影响基本隐藏）
-sed -i '/CMD_SUSFS_SET_SUS_PATH_UID_FILTER/d; /susfs_set_sus_path_uid_filter/d' KernelSU/kernel/supercall/supercall.c
-# Nova 还引用了 SUSFS v2.4 的两个新接口，v2.3.0 里没有，补空实现（仅少了“按 app 字符串过滤/按类型隐藏”的增强）
-if ! grep -q "susfs_parse_sus_path_app_strings" fs/susfs.c; then
-cat >> fs/susfs.c <<'EOF'
-
-/* SukiSU-Nova 兼容：SUSFS v2.4 接口，v2.3.0 无对应实现 */
-int susfs_add_sus_type(const char *secctx, u32 type_value)
-{
-	(void)secctx; (void)type_value;
-	return 0;
-}
-
-void susfs_parse_sus_path_app_strings(void)
-{
-}
-EOF
-fi
-ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
-grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
-grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+    echo "Applying SukiSU-Ultra (kernel commit f4863b20)..."
+    curl -LSs "https://github.com/liyafe1997/SukiSU-Ultra/raw/4ff14cf0051d04209c4abd5027d99d8e7780ef5b/kernel/setup.sh" | bash -s f4863b20cc8dc0f8cc67418980f022e43014b598
 else
-echo "KSU_ENABLE=false：构建纯原版基线（不集成 KernelSU）"
+    echo "KSU_ENABLE=false：构建纯原版基线（不集成 KernelSU）"
 fi
 
 echo "Cleaning..."
@@ -153,44 +119,29 @@ if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
 fi
 
 make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
-# SukiSU Nova: KSU + SUSFS v2.3.0 + KPM（可用环境变量裁剪，便于二分定位）
+# SukiSU-Ultra: KSU(MANUAL_HOOK) + SUSFS(树内) + KPM —— 与上游 build.sh 逐项一致
 if [ "$KSU_ENABLE" = "true" ]; then
-    scripts/config --file out/.config -e KSU
-    # 走源码里的手动 hook 调用点 + LSM hook，关闭运行期改写指令的后端
-    scripts/config --file out/.config -e KSU_LSM_SECURITY_HOOKS \
-        -d KSU_HACK_ARM64_BRANCH_LINK -d KSU_TAMPER_SYSCALL_TABLE
-    if [ "$SUSFS_ENABLE" = "true" ]; then
-        if [ "${SUSFS_MIN:-false}" = "true" ]; then
-            # 最小化：只保留 SUSFS 框架（Nova 的 sucompat 代码依赖它），关闭全部隐藏子功能
-            scripts/config --file out/.config \
-                -e KSU_SUSFS -e KSU_SUSFS_INLINE_HOOK \
-                -d KSU_SUSFS_SUS_PATH -d KSU_SUSFS_SUS_MOUNT -d KSU_SUSFS_SUS_KSTAT \
-                -d KSU_SUSFS_SPOOF_UNAME -d KSU_SUSFS_ENABLE_LOG \
-                -d KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS -d KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-                -d KSU_SUSFS_OPEN_REDIRECT -d KSU_SUSFS_SUS_MAP -d KSU_SUSFS_PRIORITY_UID_FILTER
-        else
-            scripts/config --file out/.config \
-                -e KSU_SUSFS \
-                -e KSU_SUSFS_INLINE_HOOK \
-                -e KSU_SUSFS_SUS_PATH \
-                -e KSU_SUSFS_SUS_MOUNT \
-                -e KSU_SUSFS_SUS_KSTAT \
-                -e KSU_SUSFS_SPOOF_UNAME \
-                -e KSU_SUSFS_ENABLE_LOG \
-                -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-                -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-                -e KSU_SUSFS_OPEN_REDIRECT \
-                -e KSU_SUSFS_SUS_MAP \
-                -e KSU_SUSFS_PRIORITY_UID_FILTER
-        fi
-    else
-        scripts/config --file out/.config -d KSU_SUSFS
-    fi
-    if [ "$KPM_ENABLE" = "true" ]; then
-        scripts/config --file out/.config -e KPM
-    else
-        scripts/config --file out/.config -d KPM
-    fi
+    scripts/config --file out/.config \
+    -e KSU \
+    -e KSU_MANUAL_HOOK \
+    -e KSU_SUSFS_HAS_MAGIC_MOUNT \
+    -d KSU_SUSFS_SUS_PATH \
+    -e KSU_SUSFS_SUS_MOUNT \
+    -e KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT \
+    -e KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+    -e KSU_SUSFS_SUS_KSTAT \
+    -d KSU_SUSFS_SUS_OVERLAYFS \
+    -e KSU_SUSFS_TRY_UMOUNT \
+    -e KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT \
+    -e KSU_SUSFS_SPOOF_UNAME \
+    -e KSU_SUSFS_ENABLE_LOG \
+    -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+    -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+    -d KSU_SUSFS_OPEN_REDIRECT \
+    -d KSU_SUSFS_SUS_SU \
+    -e KPM
+else
+    scripts/config --file out/.config -d KSU
 fi
 # MIUI 专用配置
 scripts/config --file out/.config \
@@ -241,10 +192,10 @@ mv .dts.bak ${dts_source}
 rm -rf anykernel/kernels/
 mkdir -p anykernel/kernels/
 
-# KPM 支持：对 Image 打 patch
+# KPM 支持：对 Image 打 patch（与上游一致：SukiSU-Ultra 0.12.0）
 if [ "$KSU_ENABLE" = "true" ] && [ "$KPM_ENABLE" = "true" ]; then
 cd out/arch/arm64/boot/
-wget -q https://github.com/SukiSU-Nova/SukiSU_KernelPatch_patch/releases/download/0.14.0/patch_linux
+wget -q https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
 chmod +x patch_linux
 ./patch_linux
 rm Image
