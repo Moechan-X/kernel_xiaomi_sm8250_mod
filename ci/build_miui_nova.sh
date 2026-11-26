@@ -50,8 +50,11 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     echo "Cloning SukiSU-Nova (main)..."
     rm -rf KernelSU
     git clone --depth=1 https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
-    # 4.19 兼容：MODULE_IMPORT_NS 是 5.4+ 的宏，缺失会被当成无类型声明报错
+    # 4.19 兼容修正：
+    #  - MODULE_IMPORT_NS 是 5.4+ 的宏，缺失会被当成无类型声明报错
+    #  - linux/pgtable.h 是 5.4+ 才有的路径，4.19 用 asm/pgtable.h
     grep -rl "MODULE_IMPORT_NS" KernelSU/kernel 2>/dev/null | xargs -r sed -i '/MODULE_IMPORT_NS/d'
+    grep -rl "linux/pgtable.h" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's|linux/pgtable.h|asm/pgtable.h|'
     ln -sf "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
     grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
