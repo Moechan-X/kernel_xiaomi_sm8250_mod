@@ -139,7 +139,7 @@ scripts/config --file out/.config \
     -e MI_RECLAIM \
     -e RTMM
 # Nova 面向新内核，4.19 上会有若干“仅告警”级别的差异，降级为 warning
-KCFLAGS="-Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=unused-but-set-variable -Wno-error=misleading-indentation -Wno-error=address-of-packed-member"
+KCFLAGS="-Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=misleading-indentation -Wno-error=address-of-packed-member -Wno-unknown-warning-option"
 make $MAKE_ARGS KCFLAGS="$KCFLAGS" -j$(nproc)
 
 if [ ! -f "out/arch/arm64/boot/Image" ]; then
