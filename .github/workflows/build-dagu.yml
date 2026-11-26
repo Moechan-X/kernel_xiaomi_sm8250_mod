@@ -7,6 +7,18 @@ on:
         description: "设备代号 (defconfig 前缀)"
         required: false
         default: "dagu"
+      ksu:
+        description: "集成 SukiSU Nova (true/false)"
+        required: false
+        default: "true"
+      susfs:
+        description: "启用 SUSFS (true/false)"
+        required: false
+        default: "true"
+      kpm:
+        description: "启用 KPM + Image patch (true/false)"
+        required: false
+        default: "true"
 
 permissions:
   contents: write
@@ -35,6 +47,10 @@ jobs:
       - name: Build MIUI kernel
         env:
           TARGET_DEVICE: ${{ github.event.inputs.device || 'dagu' }}
+          KSU_ENABLE: ${{ github.event.inputs.ksu || 'true' }}
+          SUSFS_ENABLE: ${{ github.event.inputs.susfs || 'true' }}
+          KPM_ENABLE: ${{ github.event.inputs.kpm || 'true' }}
+          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || (github.event.inputs.kpm == 'false' && '_nokpm' || '') }}
         run: |
           chmod +x ci/build_miui_nova.sh
           bash ci/build_miui_nova.sh
@@ -50,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="dagu-nova-$(date +%Y%m%d-%H%M%S)"
+          TAG="dagu-nova-ksu${{ github.event.inputs.ksu }}-kpm${{ github.event.inputs.kpm }}-susfs${{ github.event.inputs.susfs }}-$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" *.zip \
             --title "dagu MIUI kernel (SukiSU Nova) $TAG" \
             --notes "Xiaomi Pad 5 Pro 12.4 (dagu) MIUI/HyperOS 内核，SukiSU Nova + SUSFS + KPM。刷入前请确认 ROM 为 MIUI/HyperOS，AOSP 会黑屏。"
