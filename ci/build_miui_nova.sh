@@ -59,6 +59,14 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     grep -rl "linux/pgtable.h" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's|linux/pgtable.h|asm/pgtable.h|'
     grep -rl "linux/hex.h" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's|linux/hex.h|linux/kernel.h|'
     grep -rl "linux/bsearch.h" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's|linux/bsearch.h|linux/kernel.h|'
+    # 4.19 缺失的函数/枚举 → 等价旧 API：
+    #  - strncpy_from_user_nofault (5.8+) -> strncpy_from_unsafe_user（签名一致）
+    #  - copy_from_user_nofault / copy_to_user_nofault (5.8+) -> probe_kernel_read / probe_kernel_write
+    #  - TWA_RESUME (5.9+) -> true（4.19 的 task_work_add 第三参是 bool notify）
+    grep -rl "strncpy_from_user_nofault" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's/strncpy_from_user_nofault/strncpy_from_unsafe_user/g'
+    grep -rl "copy_from_user_nofault" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's/copy_from_user_nofault/probe_kernel_read/g'
+    grep -rl "copy_to_user_nofault" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's/copy_to_user_nofault/probe_kernel_write/g'
+    grep -rl "TWA_RESUME" KernelSU/kernel 2>/dev/null | xargs -r sed -i 's/TWA_RESUME/true/g'
     ln -sf "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
     grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -231,15 +239,20 @@ scripts/config --file out/.config \
     -e BOOTUP_RECLAIM \
     -e MI_RECLAIM \
     -e RTMM
-# 性能优化（省电优先）：仅提供 TCP 拥塞算法可选，默认仍用厂商值
-# 说明：不改 HZ/schedutil/GPU 频率，避免增加功耗
+# 性能优化（参考 lly Realking 等 kona 内核的通行做法）：
+#  - HZ_300：调度粒度更细，交互更平滑（功耗代价约 1~3%）
+#  - TCP BBR 设为默认（移动网络吞吐/延迟更好），其余算法保留可切换
 if [ "${PERF_ENABLE:-true}" = "true" ]; then
     scripts/config --file out/.config \
+        -e HZ_300 \
+        -d HZ_100 \
+        -e TCP_CONG_ADVANCED \
         -e TCP_CONG_BBR \
         -e TCP_CONG_WESTWOOD \
         -e TCP_CONG_BIC \
         -e TCP_CONG_HTCP \
-        -e TCP_CONG_VENO
+        -e TCP_CONG_VENO \
+        --set-str DEFAULT_TCP_CONG bbr
 fi
 # Nova 面向新内核，4.19 上会有若干“仅告警”级别的差异，降级为 warning
 KCFLAGS="-Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=misleading-indentation -Wno-error=address-of-packed-member -Wno-unknown-warning-option"
