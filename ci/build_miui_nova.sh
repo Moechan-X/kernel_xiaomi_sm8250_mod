@@ -50,6 +50,8 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     echo "Cloning SukiSU-Nova (main)..."
     rm -rf KernelSU
     git clone --depth=1 https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
+    # 4.19 兼容：MODULE_IMPORT_NS 是 5.4+ 的宏，缺失会被当成无类型声明报错
+    grep -rl "MODULE_IMPORT_NS" KernelSU/kernel 2>/dev/null | xargs -r sed -i '/MODULE_IMPORT_NS/d'
     ln -sf "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
     grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -67,35 +69,23 @@ fi
 if [ "${PERF_ENABLE:-true}" = "true" ]; then
     echo "=== Applying performance tunings ==="
 
-    # 1) WALT schedutil：hispeed 门槛 90->80；金核/大核 rtg boost 0->1.5/1.8GHz
-    SU=kernel/sched/cpufreq_schedutil.c
-    if [ -f "$SU" ]; then
-        sed -i 's/^#define DEFAULT_HISPEED_LOAD 90$/#define DEFAULT_HISPEED_LOAD 80/' $SU
-        sed -i 's/^#define DEFAULT_CPU4_RTG_BOOST_FREQ 0$/#define DEFAULT_CPU4_RTG_BOOST_FREQ 1516800/' $SU
-        sed -i 's/^#define DEFAULT_CPU7_RTG_BOOST_FREQ 0$/#define DEFAULT_CPU7_RTG_BOOST_FREQ 1804800/' $SU
-        grep -q "DEFAULT_HISPEED_LOAD 80" $SU && echo "  [ok] schedutil tunables" || echo "  [warn] schedutil pattern mismatch"
-    fi
-
-    # 2) cpu-boost：触控/按键 boost 默认频率（银 1.28 / 金 1.6 / 大核 1.8-2.05GHz）
+    # 1) cpu-boost：轻度触控 boost（仅在触控瞬间拉频，功耗可控，提升跟手度）
+    #    不使用激进值，保持"流畅 + 省电"平衡
     CB=drivers/cpufreq/cpu-boost.c
     if [ -f "$CB" ] && ! grep -q "perf: input boost defaults" "$CB"; then
-        perl -0pi -e 's/(\t\ts->cpu = cpu;\n)/$1\t\t\/* perf: input boost defaults *\/\n\t\tif (cpu <= 3) {\n\t\t\ts->input_boost_freq = 1286400;\n\t\t\ts->powerkey_input_boost_freq = 1478400;\n\t\t} else if (cpu <= 6) {\n\t\t\ts->input_boost_freq = 1612800;\n\t\t\ts->powerkey_input_boost_freq = 1804800;\n\t\t} else {\n\t\t\ts->input_boost_freq = 1804800;\n\t\t\ts->powerkey_input_boost_freq = 2054400;\n\t\t}\n/' $CB
-        grep -q "perf: input boost defaults" $CB && echo "  [ok] cpu-boost defaults" || { echo "  [FAIL] cpu-boost insert"; exit 1; }
+        perl -0pi -e 's/(\t\ts->cpu = cpu;\n)/$1\t\t\/* perf: input boost defaults *\/\n\t\tif (cpu <= 3) {\n\t\t\ts->input_boost_freq = 1036800;\n\t\t\ts->powerkey_input_boost_freq = 1228800;\n\t\t} else if (cpu <= 6) {\n\t\t\ts->input_boost_freq = 1324800;\n\t\t\ts->powerkey_input_boost_freq = 1516800;\n\t\t} else {\n\t\t\ts->input_boost_freq = 1516800;\n\t\t\ts->powerkey_input_boost_freq = 1804800;\n\t\t}\n/' $CB
+        grep -q "perf: input boost defaults" $CB && echo "  [ok] cpu-boost light defaults" || { echo "  [FAIL] cpu-boost insert"; exit 1; }
     fi
 
-    # 3) 块设备 readahead 128K -> 512K（UFS 顺序读更快）
+    # 2) 块设备 readahead 128K -> 512K（IO 更快完成，减少等待与唤醒，兼顾流畅省电）
     BC=block/blk-core.c
     if [ -f "$BC" ] && ! grep -q "4 \* VM_MAX_READAHEAD" "$BC"; then
         perl -0pi -e 's{\tq->backing_dev_info->ra_pages =\n\t\t\t\(VM_MAX_READAHEAD \* 1024\) / PAGE_SIZE;\n\tq->backing_dev_info->io_pages =\n\t\t\t\(VM_MAX_READAHEAD \* 1024\) / PAGE_SIZE;}{\tq->backing_dev_info->ra_pages =\n\t\t\t(4 * VM_MAX_READAHEAD * 1024) / PAGE_SIZE;\n\tq->backing_dev_info->io_pages =\n\t\t\t(4 * VM_MAX_READAHEAD * 1024) / PAGE_SIZE;}' $BC
         grep -q "4 \* VM_MAX_READAHEAD" $BC && echo "  [ok] readahead 512K" || echo "  [warn] readahead pattern mismatch"
     fi
 
-    # 4) GPU(KGSL) 初始频率档 290MHz -> 381MHz
-    GD=arch/arm64/boot/dts/vendor/qcom/kona-gpu.dtsi
-    if [ -f "$GD" ]; then
-        sed -i 's/qcom,initial-pwrlevel = <2>;/qcom,initial-pwrlevel = <1>;/' $GD
-        grep -q "qcom,initial-pwrlevel = <1>;" $GD && echo "  [ok] gpu initial pwrlevel" || echo "  [warn] gpu pattern mismatch"
-    fi
+    # 说明：GPU 初始档、HZ、EAS/schedutil 参数一律保持原厂值，
+    #       以免增加待机/满载功耗（用户要求：流畅省电、稳定不出问题）。
 else
     echo "PERF_ENABLE=false：不应用性能调优"
 fi
@@ -234,20 +224,15 @@ scripts/config --file out/.config \
     -e BOOTUP_RECLAIM \
     -e MI_RECLAIM \
     -e RTMM
-# 性能优化：CPU 调度(HZ 300) + 网络(TCP westwood 默认，附带 BBR/BIC/HTCP/VENO 可选)
+# 性能优化（省电优先）：仅提供 TCP 拥塞算法可选，默认仍用厂商值
+# 说明：不改 HZ/schedutil/GPU 频率，避免增加功耗
 if [ "${PERF_ENABLE:-true}" = "true" ]; then
     scripts/config --file out/.config \
-        -e HZ_300 \
-        -d HZ_100 \
         -e TCP_CONG_BBR \
         -e TCP_CONG_WESTWOOD \
         -e TCP_CONG_BIC \
         -e TCP_CONG_HTCP \
-        -e TCP_CONG_VENO \
-        -e TCP_CONG_SCALABLE \
-        -e TCP_CONG_ILLINOIS \
-        -e TCP_CONG_DCTCP \
-        --set-str DEFAULT_TCP_CONG westwood
+        -e TCP_CONG_VENO
 fi
 # Nova 面向新内核，4.19 上会有若干“仅告警”级别的差异，降级为 warning
 KCFLAGS="-Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=misleading-indentation -Wno-error=address-of-packed-member -Wno-unknown-warning-option"
