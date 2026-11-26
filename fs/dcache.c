@@ -1,4 +1,4 @@
-﻿/*
+/*
  * fs/dcache.c
  *
  * Complete reimplementation
