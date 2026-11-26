@@ -147,19 +147,29 @@ if [ "$KSU_ENABLE" = "true" ]; then
     scripts/config --file out/.config -e KSU_LSM_SECURITY_HOOKS \
         -d KSU_HACK_ARM64_BRANCH_LINK -d KSU_TAMPER_SYSCALL_TABLE
     if [ "$SUSFS_ENABLE" = "true" ]; then
-        scripts/config --file out/.config \
-            -e KSU_SUSFS \
-            -e KSU_SUSFS_INLINE_HOOK \
-            -e KSU_SUSFS_SUS_PATH \
-            -e KSU_SUSFS_SUS_MOUNT \
-            -e KSU_SUSFS_SUS_KSTAT \
-            -e KSU_SUSFS_SPOOF_UNAME \
-            -e KSU_SUSFS_ENABLE_LOG \
-            -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-            -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-            -e KSU_SUSFS_OPEN_REDIRECT \
-            -e KSU_SUSFS_SUS_MAP \
-            -e KSU_SUSFS_PRIORITY_UID_FILTER
+        if [ "${SUSFS_MIN:-false}" = "true" ]; then
+            # 最小化：只保留 SUSFS 框架（Nova 的 sucompat 代码依赖它），关闭全部隐藏子功能
+            scripts/config --file out/.config \
+                -e KSU_SUSFS -e KSU_SUSFS_INLINE_HOOK \
+                -d KSU_SUSFS_SUS_PATH -d KSU_SUSFS_SUS_MOUNT -d KSU_SUSFS_SUS_KSTAT \
+                -d KSU_SUSFS_SPOOF_UNAME -d KSU_SUSFS_ENABLE_LOG \
+                -d KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS -d KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+                -d KSU_SUSFS_OPEN_REDIRECT -d KSU_SUSFS_SUS_MAP -d KSU_SUSFS_PRIORITY_UID_FILTER
+        else
+            scripts/config --file out/.config \
+                -e KSU_SUSFS \
+                -e KSU_SUSFS_INLINE_HOOK \
+                -e KSU_SUSFS_SUS_PATH \
+                -e KSU_SUSFS_SUS_MOUNT \
+                -e KSU_SUSFS_SUS_KSTAT \
+                -e KSU_SUSFS_SPOOF_UNAME \
+                -e KSU_SUSFS_ENABLE_LOG \
+                -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
+                -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
+                -e KSU_SUSFS_OPEN_REDIRECT \
+                -e KSU_SUSFS_SUS_MAP \
+                -e KSU_SUSFS_PRIORITY_UID_FILTER
+        fi
     else
         scripts/config --file out/.config -d KSU_SUSFS
     fi
