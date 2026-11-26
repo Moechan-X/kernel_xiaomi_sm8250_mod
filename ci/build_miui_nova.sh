@@ -45,6 +45,23 @@ else
     echo "KSU_ENABLE=false：构建纯原版基线（不集成 KernelSU）"
 fi
 
+# ---------------- 性能/功能补丁 (ci/patches/*.patch) ----------------
+# PERF_ENABLE=false 时不应用任何补丁，构建官方原版行为。
+# 补丁按数字前缀顺序应用；git apply 失败会中止构建（防呆）。
+if [ "${PERF_ENABLE:-true}" = "true" ]; then
+    if [ -d "ci/patches" ]; then
+        for p in ci/patches/*.patch; do
+            [ -f "$p" ] || continue
+            echo "Applying perf patch: $p"
+            git apply --whitespace=nowarn "$p"
+        done
+    else
+        echo "PERF_ENABLE=true but ci/patches/ not found, skipping."
+    fi
+else
+    echo "PERF_ENABLE=false：不应用性能补丁"
+fi
+
 echo "Cleaning..."
 rm -rf out/
 rm -rf anykernel/
@@ -172,6 +189,21 @@ scripts/config --file out/.config \
     -e BOOTUP_RECLAIM \
     -e MI_RECLAIM \
     -e RTMM
+# 性能优化：CPU 调度(HZ 300) + 网络(TCP westwood 默认，附带 BBR/BIC/HTCP/VENO 可选)
+if [ "${PERF_ENABLE:-true}" = "true" ]; then
+    scripts/config --file out/.config \
+        -e HZ_300 \
+        -d HZ_100 \
+        -e TCP_CONG_BBR \
+        -e TCP_CONG_WESTWOOD \
+        -e TCP_CONG_BIC \
+        -e TCP_CONG_HTCP \
+        -e TCP_CONG_VENO \
+        -e TCP_CONG_SCALABLE \
+        -e TCP_CONG_ILLINOIS \
+        -e TCP_CONG_DCTCP \
+        --set-str DEFAULT_TCP_CONG westwood
+fi
 # Nova 面向新内核，4.19 上会有若干“仅告警”级别的差异，降级为 warning
 KCFLAGS="-Wno-error=macro-redefined -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=misleading-indentation -Wno-error=address-of-packed-member -Wno-unknown-warning-option"
 if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
