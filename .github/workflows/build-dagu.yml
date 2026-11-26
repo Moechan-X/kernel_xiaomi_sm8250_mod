@@ -8,9 +8,13 @@ on:
         required: false
         default: "dagu"
       ksu:
-        description: "集成 SukiSU Nova (true/false)"
+        description: "集成 SukiSU (true/false)"
         required: false
         default: "true"
+      ksu_mode:
+        description: "Root 实现: ultra (旧实现) / nova (新实现, com.sukisu.nova 管理器)"
+        required: false
+        default: "nova"
       susfs:
         description: "启用 SUSFS (true/false)"
         required: false
@@ -60,12 +64,13 @@ jobs:
         env:
           TARGET_DEVICE: ${{ github.event.inputs.device || 'dagu' }}
           KSU_ENABLE: ${{ github.event.inputs.ksu || 'true' }}
+          KSU_MODE: ${{ github.event.inputs.ksu_mode || 'nova' }}
           SUSFS_ENABLE: ${{ github.event.inputs.susfs || 'true' }}
           KPM_ENABLE: ${{ github.event.inputs.kpm || 'true' }}
           SUSFS_MIN: ${{ github.event.inputs.susfs_min || 'false' }}
           PSTORE_ENABLE: ${{ github.event.inputs.pstore || 'false' }}
           PERF_ENABLE: ${{ github.event.inputs.perf || 'true' }}
-          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.susfs_min == 'true' && '_susfsmin' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}${{ github.event.inputs.pstore == 'true' && '_pstore' || '' }}${{ github.event.inputs.perf == 'true' && '_perf' || '' }}
+          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.ksu_mode == 'nova' && '_nova' || '' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.susfs_min == 'true' && '_susfsmin' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}${{ github.event.inputs.pstore == 'true' && '_pstore' || '' }}${{ github.event.inputs.perf == 'true' && '_perf' || '' }}
         run: |
           chmod +x ci/build_miui_nova.sh
           bash ci/build_miui_nova.sh
@@ -81,7 +86,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="dagu-nova-ksu${{ github.event.inputs.ksu }}-kpm${{ github.event.inputs.kpm }}-susfs${{ github.event.inputs.susfs }}-$(date +%Y%m%d-%H%M%S)"
+          TAG="dagu-${{ github.event.inputs.ksu_mode || 'nova' }}-ksu${{ github.event.inputs.ksu }}-kpm${{ github.event.inputs.kpm }}-$(date +%Y%m%d-%H%M%S)"
           gh release create "$TAG" *.zip \
-            --title "dagu MIUI kernel (SukiSU Nova) $TAG" \
-            --notes "Xiaomi Pad 5 Pro 12.4 (dagu) MIUI/HyperOS 内核，SukiSU Nova + SUSFS + KPM。刷入前请确认 ROM 为 MIUI/HyperOS，AOSP 会黑屏。"
+            --title "dagu MIUI kernel (SukiSU ${{ github.event.inputs.ksu_mode || 'nova' }}) $TAG" \
+            --notes "Xiaomi Pad 5 Pro 12.4 (dagu) MIUI/HyperOS 内核。Root 实现: SukiSU ${{ github.event.inputs.ksu_mode || 'nova' }}（nova 模式需安装 com.sukisu.nova 管理器；ultra 模式用 SukiSU-Ultra 管理器）。刷入前请确认 ROM 为 MIUI/HyperOS，AOSP 会黑屏。"
