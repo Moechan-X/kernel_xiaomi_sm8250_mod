@@ -42,11 +42,11 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     # SukiSU-Nova 的 builtin-new 分支：专为"内置进内核树"设计，自带 4.14+ 兼容层
     # （自动探测 selinux_state / strscpy / probe_kernel_* / TWA_RESUME 等新 API，
     #   缺失时回退老实现；Kbuild 还会读取树内 susfs.h 的 SUSFS_VERSION）。
-    # 它的 sucompat 提供与树内完全同名的 ksu_handle_execveat/faccessat/stat，
-    # 因此 fs/exec.c、fs/open.c、fs/stat.c 的调用点可直接复用（保留）。
-    # input/read_write/pty 的调用点 builtin-new 未必提供，用 KSU_NOVA_MODE 排除以防未定义符号。
-    echo "Guarding optional hook call sites for Nova..."
-    for f in fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
+    # builtin-new 默认走 syscall 表挂钩（KSU_TAMPER_SYSCALL_TABLE），不需要源码内联调用点；
+    # 树内为 Ultra 预留的 ksu_handle_* / ksu_execveat_hook 调用点全部用 KSU_NOVA_MODE 排除，
+    # 避免链接期未定义符号。
+    echo "Guarding in-tree hook call sites for Nova..."
+    for f in fs/exec.c fs/open.c fs/stat.c fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
         [ -f "$f" ] && sed -i 's/^#ifdef CONFIG_KSU$/#if defined(CONFIG_KSU) \&\& !defined(KSU_NOVA_MODE)/' "$f"
     done
     echo "Cloning SukiSU-Nova (builtin-new)..."
@@ -171,6 +171,8 @@ make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
 if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     scripts/config --file out/.config \
     -e KSU \
+    -e KSU_TAMPER_SYSCALL_TABLE \
+    -e KSU_LSM_SECURITY_HOOKS \
     -d KSU_SUSFS \
     -e KPM \
     -e KPROBES
