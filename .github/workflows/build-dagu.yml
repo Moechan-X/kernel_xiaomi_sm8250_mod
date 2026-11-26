@@ -27,6 +27,10 @@ on:
         description: "启用 pstore/ramoops 崩溃日志 (true/false)"
         required: false
         default: "false"
+      perf:
+        description: "应用性能优化补丁 (true/false)"
+        required: false
+        default: "true"
 
 permissions:
   contents: write
@@ -60,7 +64,8 @@ jobs:
           KPM_ENABLE: ${{ github.event.inputs.kpm || 'true' }}
           SUSFS_MIN: ${{ github.event.inputs.susfs_min || 'false' }}
           PSTORE_ENABLE: ${{ github.event.inputs.pstore || 'false' }}
-          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.susfs_min == 'true' && '_susfsmin' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}${{ github.event.inputs.pstore == 'true' && '_pstore' || '' }}
+          PERF_ENABLE: ${{ github.event.inputs.perf || 'true' }}
+          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.susfs_min == 'true' && '_susfsmin' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}${{ github.event.inputs.pstore == 'true' && '_pstore' || '' }}${{ github.event.inputs.perf == 'true' && '_perf' || '' }}
         run: |
           chmod +x ci/build_miui_nova.sh
           bash ci/build_miui_nova.sh
