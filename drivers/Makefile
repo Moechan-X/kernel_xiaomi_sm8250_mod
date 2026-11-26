@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+﻿# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the Linux kernel device drivers.
 #
@@ -194,5 +194,3 @@ obj-$(CONFIG_SIOX)		+= siox/
 obj-$(CONFIG_GNSS)		+= gnss/
 obj-$(CONFIG_SENSORS_SSC)	+= sensors/
 obj-$(CONFIG_XIAOMI_MIUI)	+= xiaomi/
-
-obj-$(CONFIG_KSU) += kernelsu/
