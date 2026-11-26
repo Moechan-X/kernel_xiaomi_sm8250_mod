@@ -1,0 +1,25 @@
+name: sync upstream
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout fork branch
+        uses: actions/checkout@v4
+        with:
+          ref: android15-lineage22-mod
+          fetch-depth: 0
+
+      - name: Merge upstream and push back
+        run: |
+          git remote add lly https://github.com/liyafe1997/kernel_xiaomi_sm8250_mod.git
+          git fetch --filter=blob:none lly android15-lineage22-mod
+          git merge --ff-only FETCH_HEAD || git merge -m "sync upstream android15-lineage22-mod (merge)" lly/android15-lineage22-mod
+          git push origin android15-lineage22-mod
