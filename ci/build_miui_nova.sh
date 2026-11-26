@@ -56,6 +56,22 @@ grep -q "ksu_hooks_global" kernel/Makefile || echo "obj-y += ksu_hooks_global.o"
 # Nova 的 supercall 引用了 SUSFS v2.4+ 才有的 CMD_SUSFS_SET_SUS_PATH_UID_FILTER，
 # 内核里的 SUSFS 是 v2.3.0，去掉这分支（只影响按 uid 隐藏路径的过滤，不影响基本隐藏）
 sed -i '/CMD_SUSFS_SET_SUS_PATH_UID_FILTER/d; /susfs_set_sus_path_uid_filter/d' KernelSU/kernel/supercall/supercall.c
+# Nova 还引用了 SUSFS v2.4 的两个新接口，v2.3.0 里没有，补空实现（仅少了“按 app 字符串过滤/按类型隐藏”的增强）
+if ! grep -q "susfs_parse_sus_path_app_strings" fs/susfs.c; then
+cat >> fs/susfs.c <<'EOF'
+
+/* SukiSU-Nova 兼容：SUSFS v2.4 接口，v2.3.0 无对应实现 */
+int susfs_add_sus_type(const char *secctx, u32 type_value)
+{
+	(void)secctx; (void)type_value;
+	return 0;
+}
+
+void susfs_parse_sus_path_app_strings(void)
+{
+}
+EOF
+fi
 ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
 grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
 grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
