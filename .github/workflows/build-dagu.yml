@@ -50,7 +50,7 @@ jobs:
           KSU_ENABLE: ${{ github.event.inputs.ksu || 'true' }}
           SUSFS_ENABLE: ${{ github.event.inputs.susfs || 'true' }}
           KPM_ENABLE: ${{ github.event.inputs.kpm || 'true' }}
-          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || (github.event.inputs.kpm == 'false' && '_nokpm' || '') }}
+          VARIANT: ${{ github.event.inputs.ksu == 'false' && '_base' || '_ksu' }}${{ github.event.inputs.susfs == 'false' && '_nosusfs' || '' }}${{ github.event.inputs.kpm == 'false' && '_nokpm' || '' }}
         run: |
           chmod +x ci/build_miui_nova.sh
           bash ci/build_miui_nova.sh
