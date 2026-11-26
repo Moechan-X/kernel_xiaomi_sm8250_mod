@@ -42,6 +42,15 @@ if [ "$KSU_ENABLE" = "true" ]; then
 if [ ! -d KernelSU ]; then
     git clone --depth=1 -b builtin-new https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
 fi
+# 本内核源码已内置 SukiSU 风格的手动 hook 调用点，它们用这三个开关变量门控；
+# Nova builtin-new 只 extern 引用不定义，这里补上默认开启（走手动 hook 路径）
+cat >> KernelSU/kernel/ksu.c <<'EOF'
+
+/* downstream 4.19: 手动 hook 开关（由内核源码里的 ksu_*_hook 调用点使用） */
+bool ksu_execveat_hook __read_mostly = true;
+bool ksu_vfs_read_hook __read_mostly = true;
+bool ksu_input_hook __read_mostly = true;
+EOF
 ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
 grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
 grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -113,8 +122,9 @@ make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
 # SukiSU Nova: KSU + SUSFS v2.3.0 + KPM（可用环境变量裁剪，便于二分定位）
 if [ "$KSU_ENABLE" = "true" ]; then
     scripts/config --file out/.config -e KSU
-    # 4.19 无 kprobe 依赖：用 ARM64 inline branch-link hook 做 sucompat
-    scripts/config --file out/.config -e KSU_HACK_ARM64_BRANCH_LINK -d KSU_TAMPER_SYSCALL_TABLE
+    # 走源码里的手动 hook 调用点 + LSM hook，关闭运行期改写指令的后端
+    scripts/config --file out/.config -e KSU_LSM_SECURITY_HOOKS \
+        -d KSU_HACK_ARM64_BRANCH_LINK -d KSU_TAMPER_SYSCALL_TABLE
     if [ "$SUSFS_ENABLE" = "true" ]; then
         scripts/config --file out/.config \
             -e KSU_SUSFS \
