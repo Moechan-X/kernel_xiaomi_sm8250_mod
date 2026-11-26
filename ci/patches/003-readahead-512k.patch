@@ -1,0 +1,19 @@
+--- a/block/blk-core.c
++++ b/block/blk-core.c
+@@ -1036,8 +1036,8 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
+ 	q->stats = blk_alloc_queue_stats();
+ 	if (!q->stats)
+ 		goto fail_stats;
+ 
+-	q->backing_dev_info->ra_pages =
+-			(VM_MAX_READAHEAD * 1024) / PAGE_SIZE;
+-	q->backing_dev_info->io_pages =
+-			(VM_MAX_READAHEAD * 1024) / PAGE_SIZE;
++	/* 提升 readahead 到 512K：UFS 顺序读更快，应用加载/启动更顺 */
++	q->backing_dev_info->ra_pages =
++			(4 * VM_MAX_READAHEAD * 1024) / PAGE_SIZE;
++	q->backing_dev_info->io_pages =
++			(4 * VM_MAX_READAHEAD * 1024) / PAGE_SIZE;
+ 	q->backing_dev_info->capabilities = BDI_CAP_CGROUP_WRITEBACK;
+ 	q->backing_dev_info->name = "block";
+ 	q->node = node_id;
