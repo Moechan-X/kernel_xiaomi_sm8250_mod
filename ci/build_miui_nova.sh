@@ -52,6 +52,9 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     echo "Cloning SukiSU-Nova (builtin-new)..."
     rm -rf KernelSU
     git clone --depth=1 -b builtin-new https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
+    # builtin-new 的 supercall 引用了 SUSFS v2.5+ 才有的 CMD_SUSFS_SET_SUS_PATH_UID_FILTER，
+    # 树内 v2.3.0 无该命令，删除对应 case（3 行）以免编译/链接失败
+    sed -i '/CMD_SUSFS_SET_SUS_PATH_UID_FILTER/,+2d' KernelSU/kernel/supercall/supercall.c 2>/dev/null || true
     ln -sf "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
     grep -q "kernelsu" drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
     grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -64,11 +67,14 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
         git fetch --depth=1 origin "$SUSFS_SRC" 2>/dev/null || true
         if git cat-file -e "$SUSFS_SRC^{commit}" 2>/dev/null; then
             echo "Restoring SUSFS v2.x files from $SUSFS_SRC ..."
-            # 自动发现该 commit 里所有引用 susfs 的源文件，统一替换，保证 SUSFS 代码与宏定义版本一致
-            SUSFS_FILES=$(git grep -l -i "susfs" "$SUSFS_SRC" -- fs include kernel mm drivers 2>/dev/null | sed "s|^$SUSFS_SRC:||")
-            echo "  susfs-related files: $(echo "$SUSFS_FILES" | wc -l)"
-            echo "$SUSFS_FILES" | while read -r f; do
-                [ -n "$f" ] && git checkout "$SUSFS_SRC" -- "$f" 2>/dev/null
+            # 取"并集"：当前树里含 susfs 的文件 + 源 commit 里含 susfs 的文件，
+            # 都统一对齐到源 commit 版本，避免 v1.5.7/v2.x 两套 hook 混用导致宏不匹配。
+            CUR_FILES=$(git grep -l -i "susfs" -- fs include kernel mm drivers 2>/dev/null)
+            SRC_FILES=$(git grep -l -i "susfs" "$SUSFS_SRC" -- fs include kernel mm drivers 2>/dev/null | sed "s|^$SUSFS_SRC:||")
+            ALL_FILES=$(printf "%s\n%s\n" "$CUR_FILES" "$SRC_FILES" | sort -u | sed '/^$/d')
+            echo "  aligning $(echo "$ALL_FILES" | wc -l) susfs files to source version"
+            echo "$ALL_FILES" | while read -r f; do
+                [ -n "$f" ] && git cat-file -e "$SUSFS_SRC:$f" 2>/dev/null && git checkout "$SUSFS_SRC" -- "$f" 2>/dev/null
             done
             echo "  changed files: $(git status --porcelain | wc -l)"
         else
