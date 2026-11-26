@@ -35,17 +35,13 @@ export PATH="/usr/lib/ccache:$PATH"
 MAKE_ARGS="ARCH=arm64 SUBARCH=arm64 O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- CLANG_TRIPLE=aarch64-linux-gnu-"
 
 # ---------------- SukiSU Nova ----------------
-# builtin 分支：不依赖 kprobe，使用内核源码里已有的手动 hook（本内核源码自带）
+# builtin-new 分支：面向 3.10~7.1 的 downstream 内核，自带 4.19 兼容层
+# （kernel_compat.h 提供 strncpy_from_user_nofault / 三参数 access_ok 等 shim，
+#   sucompat 走 ARM64 inline branch-link hook，无需源码里保留手动 hook）
 if [ "$KSU_ENABLE" = "true" ]; then
 if [ ! -d KernelSU ]; then
-    git clone --depth=1 -b builtin https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
+    git clone --depth=1 -b builtin-new https://github.com/SukiSU-Nova/SukiSU-Nova KernelSU
 fi
-# 4.19 内核没有 linux/static_call.h（5.10+ 才引入），builtin 分支中该头未被使用，直接移除引用
-sed -i '/#include <linux\/static_call.h>/d' KernelSU/kernel/kernel_includes.h
-# 4.19 的 access_ok 仍是三参数形式 (type, addr, size)
-sed -i 's/access_ok(u64_to_user_ptr(cmd.result_code), sizeof(result))/access_ok(VERIFY_WRITE, u64_to_user_ptr(cmd.result_code), sizeof(result))/' KernelSU/kernel/extension/kpm/kpm.c
-# sulog 里误用了 5.8+ 才有的 strncpy_from_user_nofault，改用 Nova 自带的兼容封装
-sed -i 's/^\(\s*\)strncpy_from_user_nofault(arg,/\1ksu_strncpy_from_user_nofault(arg,/' KernelSU/kernel/sulog/event.c
 ln -sfn "$(realpath --relative-to=drivers KernelSU/kernel)" drivers/kernelsu
 grep -q "kernelsu" drivers/Makefile || printf "\nobj-\$(CONFIG_KSU) += kernelsu/\n" >> drivers/Makefile
 grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
@@ -117,9 +113,12 @@ make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
 # SukiSU Nova: KSU + SUSFS v2.3.0 + KPM（可用环境变量裁剪，便于二分定位）
 if [ "$KSU_ENABLE" = "true" ]; then
     scripts/config --file out/.config -e KSU
+    # 4.19 无 kprobe 依赖：用 ARM64 inline branch-link hook 做 sucompat
+    scripts/config --file out/.config -e KSU_HACK_ARM64_BRANCH_LINK -d KSU_TAMPER_SYSCALL_TABLE
     if [ "$SUSFS_ENABLE" = "true" ]; then
         scripts/config --file out/.config \
             -e KSU_SUSFS \
+            -e KSU_SUSFS_INLINE_HOOK \
             -e KSU_SUSFS_SUS_PATH \
             -e KSU_SUSFS_SUS_MOUNT \
             -e KSU_SUSFS_SUS_KSTAT \
@@ -138,7 +137,6 @@ if [ "$KSU_ENABLE" = "true" ]; then
     else
         scripts/config --file out/.config -d KPM
     fi
-    scripts/config --file out/.config -d KSU_SUSFS_SUS_SU
 fi
 # MIUI 专用配置
 scripts/config --file out/.config \
