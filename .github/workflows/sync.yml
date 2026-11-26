@@ -17,9 +17,18 @@ jobs:
           ref: android15-lineage22-mod
           fetch-depth: 0
 
-      - name: Merge upstream and push back
+      - name: Restore upstream source tree (keep our ci/ + workflows)
         run: |
+          git config user.name "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
           git remote add lly https://github.com/liyafe1997/kernel_xiaomi_sm8250_mod.git
           git fetch --filter=blob:none lly android15-lineage22-mod
-          git merge --ff-only FETCH_HEAD || git merge -m "sync upstream android15-lineage22-mod (merge)" lly/android15-lineage22-mod
-          git push origin android15-lineage22-mod
+          # 用上游文件覆盖整棵树（lly 不含 ci/ 与 .github/，故这些文件会保留）
+          git checkout FETCH_HEAD -- .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No tree changes."
+          else
+            git commit -m "ci: restore kernel tree from upstream lly (susfs v1.5.7)"
+            git push origin android15-lineage22-mod
+          fi
