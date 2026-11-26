@@ -145,7 +145,9 @@ if [ "${PSTORE_ENABLE:-false}" = "true" ]; then
         [ -f "$f" ] || continue
         grep -q "ramoops_region" "$f" && continue
         grep -q "reserved-memory {" "$f" || continue
-        awk '{print} /reserved-memory \{/{printf "\t\tramoops_mem: ramoops_region@9fe00000 {\n\t\t\tcompatible = \"ramoops\";\n\t\t\treg = <0x0 0x9fe00000 0x0 0x100000>;\n\t\t\trecord-size = <0x20000>;\n\t\t\tconsole-size = <0x60000>;\n\t\t\tpmsg-size = <0x20000>;\n\t\t\tno-map;\n\t\t};\n"}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        # 必须插在 reserved-memory 的属性（#address-cells/#size-cells/ranges）之后，
+        # 否则 dtc 会报 "Properties must precede subnodes"
+        awk '{print} /reserved-memory \{/{inres=1} inres && /^[ \t]*ranges;[ \t]*$/{printf "\t\tramoops_mem: ramoops_region@9fe00000 {\n\t\t\tcompatible = \"ramoops\";\n\t\t\treg = <0x0 0x9fe00000 0x0 0x100000>;\n\t\t\trecord-size = <0x20000>;\n\t\t\tconsole-size = <0x60000>;\n\t\t\tpmsg-size = <0x20000>;\n\t\t\tno-map;\n\t\t};\n"; inres=0}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
         echo "pstore: injected ramoops node into $f"
     done
 fi
