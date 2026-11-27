@@ -97,6 +97,18 @@ SUSFS_SHIM_EOF
             echo "  [warn] SUSFS source commit unavailable; building without SUSFS"
         fi
     fi
+    # SUSFS 模式只能用 inline hook，而管理器的 ksu fd 安装/探测走 sys_reboot supercall，
+    # 因此必须在 kernel/reboot.c 的 reboot syscall 入口插入钩子——且要放在
+    # !ns_capable(CAP_SYS_BOOT) 检查之前，否则非 root 的管理器会被直接 -EPERM。
+    if [ "${SUSFS_ENABLE:-true}" = "true" ] && [ -f kernel/reboot.c ] && ! grep -q "ksu_handle_sys_reboot" kernel/reboot.c; then
+        perl -0pi -e 's|(#include <linux/uaccess.h>\n)|$1#ifdef CONFIG_KSU\nextern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n#endif\n|' kernel/reboot.c
+        perl -0pi -e 's|(\tint ret = 0;\n\n\t/\* We only trust the superuser with rebooting the system\. \*/)|\tint ret = 0;\n\n#ifdef CONFIG_KSU\n\tif (!ksu_handle_sys_reboot(magic1, magic2, cmd, &arg))\n\t\treturn 0;\n#endif\n\n\t/* We only trust the superuser with rebooting the system. */|' kernel/reboot.c
+        if grep -q "ksu_handle_sys_reboot" kernel/reboot.c; then
+            echo "  injected reboot supercall hook"
+        else
+            echo "  [WARN] reboot hook injection FAILED (pattern mismatch)"
+        fi
+    fi
     # 关键：SUSFS 恢复会用 git checkout 覆盖 fs/exec.c、fs/stat.c 等，冲掉前面的门控，
     # 导致留下 Ultra 形态的调用点（传用户指针），而 Nova 的 ksu_handle_stat 期望内核指针
     # → 启动时 init 调用 stat 会因未走 uaccess 访问用户态地址而 panic。
@@ -237,7 +249,7 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
         echo "Enabling KSU_SUSFS (v2.x detected)"
         scripts/config --file out/.config \
         -e KSU \
-        -e KSU_TAMPER_SYSCALL_TABLE \
+        -d KSU_TAMPER_SYSCALL_TABLE \
         -e KSU_LSM_SECURITY_HOOKS \
         -e KSU_SUSFS \
         -e KSU_SUSFS_INLINE_HOOK \
