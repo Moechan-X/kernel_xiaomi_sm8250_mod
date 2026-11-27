@@ -103,20 +103,33 @@ SUSFS_SHIM_EOF
     # 所以必须在恢复之后重新执行：execve 规范化、setresuid 注入、reboot 注入、再门控。
     echo "Applying Nova adaptations after SUSFS restore..."
 
-    # 1) fs/exec.c：解除 Ultra 形态门控，去掉 ksu_execveat_hook 变量（Nova 不定义），
-    #    保留签名一致的 ksu_handle_execveat 直接调用（sucompat/ksud 启动链依赖它）。
+    # 1) fs/exec.c：去掉 extern bool ksu_execveat_hook（Nova 不定义），
+    #    把 if (likely/unlikely/!ksu_execveat_hook) 分支删掉，保留直接调用。
+    #    用 python3 做精确替换——不依赖 shell 的 tab/space 模式匹配。
     if [ -f fs/exec.c ]; then
-        # 先解门控（sed 幂等）
-        sed -i 's/^#if defined(CONFIG_KSU) && !defined(KSU_NOVA_MODE)$/#ifdef CONFIG_KSU/' fs/exec.c
-        # 去掉 extern bool ksu_execveat_hook（Nova 无此符号）
-        sed -i '/extern bool ksu_execveat_hook/d' fs/exec.c
-        # do_execve 中的 if/else 块 → 只保留直接调用
-        perl -0pi -e 's/\tif \(unlikely\(ksu_execveat_hook\)\)\n\t\tksu_handle_execveat\(/\tksu_handle_execveat(/' fs/exec.c
-        perl -0pi -e 's/\telse\n\t\tksu_handle_execveat_sucompat\(\(int \*\)AT_FDCWD, &filename, NULL, NULL, NULL\);\n//' fs/exec.c
-        # compat_do_execve 中的 if 块 → 只保留直接调用
-        perl -0pi -e 's/\t\tif \(!ksu_execveat_hook\)\n\t\t\tksu_handle_execveat_sucompat/\t\tksu_handle_execveat_sucompat/' fs/exec.c
+        python3 -c "
+with open('fs/exec.c','r') as f: lines = f.readlines()
+changed = False; skip_next_else = False
+out = []
+for line in lines:
+    stripped = line.rstrip('\n\r')
+    if 'extern bool ksu_execveat_hook __read_mostly;' in stripped:
+        changed = True; continue
+    if 'if (unlikely(ksu_execveat_hook))' in stripped:
+        changed = True; skip_next_else = True; continue
+    if skip_next_else and stripped.strip() == 'else':
+        changed = True; skip_next_else = False; continue
+    if 'if (!ksu_execveat_hook)' in stripped:
+        changed = True; continue
+    out.append(line)
+if changed:
+    with open('fs/exec.c','w') as f: f.writelines(out)
+    print('OK')
+else:
+    print('SKIP')
+" || echo "[ERROR] python3 execve patch failed"
         if grep -q "ksu_execveat_hook" fs/exec.c; then
-            echo "  [WARN] exec.c ksu_execveat_hook normalization FAILED"
+            echo "  [WARN] exec.c ksu_execveat_hook cleanup FAILED"
         else
             echo "  execve inline hook normalized for Nova"
         fi
