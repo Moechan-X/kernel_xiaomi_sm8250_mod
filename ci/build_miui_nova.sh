@@ -98,28 +98,33 @@ SUSFS_SHIM_EOF
             echo "  [warn] SUSFS source commit unavailable; building without SUSFS"
         fi
     fi
-    # fs/exec.c：Ultra 形态的调用点引用了 Nova 不存在的全局变量 ksu_execveat_hook，
-    # 但 execve 钩子的函数签名与 Nova 完全一致，而且 sucompat / ksud 启动依赖它，
-    # 所以不能像 stat/open 那样门控掉。这里解除门控并改成直接调用 Nova 的钩子。
-    if [ "${SUSFS_ENABLE:-true}" = "true" ] && [ -f fs/exec.c ]; then
+    # ===================== SUSFS 恢复后：Nova 适配操作 =====================
+    # 关键：SUSFS 恢复会用 git checkout 覆盖所有文件，冲掉上面的 sed/perl 修改。
+    # 所以必须在恢复之后重新执行：execve 规范化、setresuid 注入、reboot 注入、再门控。
+    echo "Applying Nova adaptations after SUSFS restore..."
+
+    # 1) fs/exec.c：解除 Ultra 形态门控，去掉 ksu_execveat_hook 变量（Nova 不定义），
+    #    保留签名一致的 ksu_handle_execveat 直接调用（sucompat/ksud 启动链依赖它）。
+    if [ -f fs/exec.c ]; then
+        # 先解门控（sed 幂等）
         sed -i 's/^#if defined(CONFIG_KSU) && !defined(KSU_NOVA_MODE)$/#ifdef CONFIG_KSU/' fs/exec.c
-        if grep -q "ksu_execveat_hook" fs/exec.c; then
-            perl -0pi -e 's/extern bool ksu_execveat_hook __read_mostly;\n//' fs/exec.c
-            perl -0pi -e 's/\tif \(unlikely\(ksu_execveat_hook\)\)\n\t\tksu_handle_execveat\(/\tksu_handle_execveat(/' fs/exec.c
-            perl -0pi -e 's/\telse\n\t\tksu_handle_execveat_sucompat\(\(int \*\)AT_FDCWD, &filename, NULL, NULL, NULL\);\n//' fs/exec.c
-            perl -0pi -e 's/\t\tif \(!ksu_execveat_hook\)\n\t\t\tksu_handle_execveat_sucompat/\t\tksu_handle_execveat_sucompat/' fs/exec.c
-        fi
+        # 去掉 extern bool ksu_execveat_hook（Nova 无此符号）
+        sed -i '/extern bool ksu_execveat_hook/d' fs/exec.c
+        # do_execve 中的 if/else 块 → 只保留直接调用
+        perl -0pi -e 's/\tif \(unlikely\(ksu_execveat_hook\)\)\n\t\tksu_handle_execveat\(/\tksu_handle_execveat(/' fs/exec.c
+        perl -0pi -e 's/\telse\n\t\tksu_handle_execveat_sucompat\(\(int \*\)AT_FDCWD, &filename, NULL, NULL, NULL\);\n//' fs/exec.c
+        # compat_do_execve 中的 if 块 → 只保留直接调用
+        perl -0pi -e 's/\t\tif \(!ksu_execveat_hook\)\n\t\t\tksu_handle_execveat_sucompat/\t\tksu_handle_execveat_sucompat/' fs/exec.c
         if grep -q "ksu_execveat_hook" fs/exec.c; then
             echo "  [WARN] exec.c ksu_execveat_hook normalization FAILED"
         else
             echo "  execve inline hook normalized for Nova"
         fi
     fi
-    # kernel/sys.c：SUSFS 模式下 Nova 会跳过 LSM task_fix_setuid（见 lsm_hooks_list.c
-    # 的 #ifndef CONFIG_KSU_SUSFS），管理器进程拿到 ksu fd 的唯一途径就是
-    # __sys_setresuid 的内联钩子 → ksu_handle_setresuid()。缺了它，管理器扫描
-    # /proc/self/fd 找不到 [ksu_driver]，就会显示"内核未安装"。
-    if [ "${SUSFS_ENABLE:-true}" = "true" ] && [ -f kernel/sys.c ] && ! grep -q "ksu_handle_setresuid" kernel/sys.c; then
+
+    # 2) kernel/sys.c：SUSFS 模式下 Nova 跳过 LSM task_fix_setuid（lsm_hooks_list.c
+    #    #ifndef CONFIG_KSU_SUSFS），管理器拿 ksu fd 的唯一通道是 __sys_setresuid 钩子。
+    if [ -f kernel/sys.c ] && ! grep -q "ksu_handle_setresuid" kernel/sys.c; then
         perl -0pi -e 's|(long __sys_setresuid\(uid_t ruid, uid_t euid, uid_t suid\))|\#if defined(CONFIG_KSU) \&\& defined(CONFIG_KSU_SUSFS)\nextern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);\n\#endif\n\n$1|' kernel/sys.c
         perl -0pi -e 's|(\tretval = security_task_fix_setuid\(new, old, LSM_SETID_RES\);\n\tif \(retval < 0\)\n\t\tgoto error;\n\n)(\treturn commit_creds\(new\);)|\#if defined(CONFIG_KSU) \&\& defined(CONFIG_KSU_SUSFS)\n\tksu_handle_setresuid(ruid, euid, suid);\n\#endif\n${1}${2}|' kernel/sys.c
         if grep -q "ksu_handle_setresuid" kernel/sys.c; then
@@ -128,10 +133,9 @@ SUSFS_SHIM_EOF
             echo "  [WARN] setresuid hook injection FAILED (pattern mismatch)"
         fi
     fi
-    # SUSFS 模式只能用 inline hook，而管理器的 ksu fd 安装/探测走 sys_reboot supercall，
-    # 因此必须在 kernel/reboot.c 的 reboot syscall 入口插入钩子——且要放在
-    # !ns_capable(CAP_SYS_BOOT) 检查之前，否则非 root 的管理器会被直接 -EPERM。
-    if [ "${SUSFS_ENABLE:-true}" = "true" ] && [ -f kernel/reboot.c ] && ! grep -q "ksu_handle_sys_reboot" kernel/reboot.c; then
+
+    # 3) kernel/reboot.c：注入 sys_reboot supercall 钩子（KSU_INSTALL_MAGIC2）
+    if [ -f kernel/reboot.c ] && ! grep -q "ksu_handle_sys_reboot" kernel/reboot.c; then
         perl -0pi -e 's|(#include <linux/uaccess.h>\n)|$1#ifdef CONFIG_KSU\nextern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n#endif\n|' kernel/reboot.c
         perl -0pi -e 's|(\tint ret = 0;\n\n\t/\* We only trust the superuser with rebooting the system\. \*/)|\tint ret = 0;\n\n#ifdef CONFIG_KSU\n\tif (!ksu_handle_sys_reboot(magic1, magic2, cmd, &arg))\n\t\treturn 0;\n#endif\n\n\t/* We only trust the superuser with rebooting the system. */|' kernel/reboot.c
         if grep -q "ksu_handle_sys_reboot" kernel/reboot.c; then
@@ -140,11 +144,9 @@ SUSFS_SHIM_EOF
             echo "  [WARN] reboot hook injection FAILED (pattern mismatch)"
         fi
     fi
-    # 关键：SUSFS 恢复会用 git checkout 覆盖 fs/stat.c 等，冲掉前面的门控，
-    # 导致留下 Ultra 形态的调用点（传用户指针），而 Nova 的 ksu_handle_stat 期望内核指针
-    # → 启动时 init 调用 stat 会因未走 uaccess 访问用户态地址而 panic。
-    # 因此必须在 SUSFS 恢复之后再门控一遍（sed 幂等）。fs/exec.c 例外：它已被
-    # 规范化为 Nova 形态，必须保持启用。
+
+    # 4) 再次门控：stat/open/read_write/input/pty 必须是 Nova 不兼容的 Ultra 形态
+    #    （被 KSU_NOVA_MODE 排除），fs/exec.c 例外——它已被规范化为 Nova 形态。
     echo "Re-guarding in-tree hook call sites after SUSFS restore..."
     for f in fs/open.c fs/stat.c fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
         [ -f "$f" ] && sed -i 's/^#ifdef CONFIG_KSU$/#if defined(CONFIG_KSU) \&\& !defined(KSU_NOVA_MODE)/' "$f"
