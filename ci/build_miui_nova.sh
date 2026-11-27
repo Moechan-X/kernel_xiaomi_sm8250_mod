@@ -42,9 +42,10 @@ if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
     # SukiSU-Nova 的 builtin-new 分支：专为"内置进内核树"设计，自带 4.14+ 兼容层
     # （自动探测 selinux_state / strscpy / probe_kernel_* / TWA_RESUME 等新 API，
     #   缺失时回退老实现；Kbuild 还会读取树内 susfs.h 的 SUSFS_VERSION）。
-    # builtin-new 默认走 syscall 表挂钩（KSU_TAMPER_SYSCALL_TABLE），不需要源码内联调用点；
-    # 树内为 Ultra 预留的 ksu_handle_* / ksu_execveat_hook 调用点全部用 KSU_NOVA_MODE 排除，
-    # 避免链接期未定义符号。
+    # 树内 Ultra 形态的调用点与 Nova 不兼容：fs/stat.c / fs/open.c 传的是用户指针，
+    # 而 Nova 期望内核 struct filename*；fs/read_write.c / input / pty 的函数签名与
+    # 全局变量也不同。一律用 KSU_NOVA_MODE 排除，避免链接期未定义符号或启动崩溃。
+    # 例外：fs/exec.c 的签名本就与 Nova 一致，SUSFS 模式下稍后会改成直接调用。
     echo "Guarding in-tree hook call sites for Nova..."
     for f in fs/exec.c fs/open.c fs/stat.c fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
         [ -f "$f" ] && sed -i 's/^#ifdef CONFIG_KSU$/#if defined(CONFIG_KSU) \&\& !defined(KSU_NOVA_MODE)/' "$f"
@@ -97,6 +98,36 @@ SUSFS_SHIM_EOF
             echo "  [warn] SUSFS source commit unavailable; building without SUSFS"
         fi
     fi
+    # fs/exec.c：Ultra 形态的调用点引用了 Nova 不存在的全局变量 ksu_execveat_hook，
+    # 但 execve 钩子的函数签名与 Nova 完全一致，而且 sucompat / ksud 启动依赖它，
+    # 所以不能像 stat/open 那样门控掉。这里解除门控并改成直接调用 Nova 的钩子。
+    if [ "${SUSFS_ENABLE:-true}" = "true" ] && [ -f fs/exec.c ]; then
+        sed -i 's/^#if defined(CONFIG_KSU) && !defined(KSU_NOVA_MODE)$/#ifdef CONFIG_KSU/' fs/exec.c
+        if grep -q "ksu_execveat_hook" fs/exec.c; then
+            perl -0pi -e 's/extern bool ksu_execveat_hook __read_mostly;\n//' fs/exec.c
+            perl -0pi -e 's/\tif \(unlikely\(ksu_execveat_hook\)\)\n\t\tksu_handle_execveat\(/\tksu_handle_execveat(/' fs/exec.c
+            perl -0pi -e 's/\telse\n\t\tksu_handle_execveat_sucompat\(\(int \*\)AT_FDCWD, &filename, NULL, NULL, NULL\);\n//' fs/exec.c
+            perl -0pi -e 's/\t\tif \(!ksu_execveat_hook\)\n\t\t\tksu_handle_execveat_sucompat/\t\tksu_handle_execveat_sucompat/' fs/exec.c
+        fi
+        if grep -q "ksu_execveat_hook" fs/exec.c; then
+            echo "  [WARN] exec.c ksu_execveat_hook normalization FAILED"
+        else
+            echo "  execve inline hook normalized for Nova"
+        fi
+    fi
+    # kernel/sys.c：SUSFS 模式下 Nova 会跳过 LSM task_fix_setuid（见 lsm_hooks_list.c
+    # 的 #ifndef CONFIG_KSU_SUSFS），管理器进程拿到 ksu fd 的唯一途径就是
+    # __sys_setresuid 的内联钩子 → ksu_handle_setresuid()。缺了它，管理器扫描
+    # /proc/self/fd 找不到 [ksu_driver]，就会显示"内核未安装"。
+    if [ "${SUSFS_ENABLE:-true}" = "true" ] && [ -f kernel/sys.c ] && ! grep -q "ksu_handle_setresuid" kernel/sys.c; then
+        perl -0pi -e 's|(long __sys_setresuid\(uid_t ruid, uid_t euid, uid_t suid\))|\#if defined(CONFIG_KSU) \&\& defined(CONFIG_KSU_SUSFS)\nextern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);\n\#endif\n\n$1|' kernel/sys.c
+        perl -0pi -e 's|(\tretval = security_task_fix_setuid\(new, old, LSM_SETID_RES\);\n\tif \(retval < 0\)\n\t\tgoto error;\n\n)(\treturn commit_creds\(new\);)|\#if defined(CONFIG_KSU) \&\& defined(CONFIG_KSU_SUSFS)\n\tksu_handle_setresuid(ruid, euid, suid);\n\#endif\n${1}${2}|' kernel/sys.c
+        if grep -q "ksu_handle_setresuid" kernel/sys.c; then
+            echo "  injected setresuid hook"
+        else
+            echo "  [WARN] setresuid hook injection FAILED (pattern mismatch)"
+        fi
+    fi
     # SUSFS 模式只能用 inline hook，而管理器的 ksu fd 安装/探测走 sys_reboot supercall，
     # 因此必须在 kernel/reboot.c 的 reboot syscall 入口插入钩子——且要放在
     # !ns_capable(CAP_SYS_BOOT) 检查之前，否则非 root 的管理器会被直接 -EPERM。
@@ -109,12 +140,13 @@ SUSFS_SHIM_EOF
             echo "  [WARN] reboot hook injection FAILED (pattern mismatch)"
         fi
     fi
-    # 关键：SUSFS 恢复会用 git checkout 覆盖 fs/exec.c、fs/stat.c 等，冲掉前面的门控，
+    # 关键：SUSFS 恢复会用 git checkout 覆盖 fs/stat.c 等，冲掉前面的门控，
     # 导致留下 Ultra 形态的调用点（传用户指针），而 Nova 的 ksu_handle_stat 期望内核指针
     # → 启动时 init 调用 stat 会因未走 uaccess 访问用户态地址而 panic。
-    # 因此必须在 SUSFS 恢复之后再门控一遍（sed 幂等）。
+    # 因此必须在 SUSFS 恢复之后再门控一遍（sed 幂等）。fs/exec.c 例外：它已被
+    # 规范化为 Nova 形态，必须保持启用。
     echo "Re-guarding in-tree hook call sites after SUSFS restore..."
-    for f in fs/exec.c fs/open.c fs/stat.c fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
+    for f in fs/open.c fs/stat.c fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
         [ -f "$f" ] && sed -i 's/^#ifdef CONFIG_KSU$/#if defined(CONFIG_KSU) \&\& !defined(KSU_NOVA_MODE)/' "$f"
     done
     echo "  call sites guarded"
