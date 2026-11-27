@@ -97,6 +97,15 @@ SUSFS_SHIM_EOF
             echo "  [warn] SUSFS source commit unavailable; building without SUSFS"
         fi
     fi
+    # 关键：SUSFS 恢复会用 git checkout 覆盖 fs/exec.c、fs/stat.c 等，冲掉前面的门控，
+    # 导致留下 Ultra 形态的调用点（传用户指针），而 Nova 的 ksu_handle_stat 期望内核指针
+    # → 启动时 init 调用 stat 会因未走 uaccess 访问用户态地址而 panic。
+    # 因此必须在 SUSFS 恢复之后再门控一遍（sed 幂等）。
+    echo "Re-guarding in-tree hook call sites after SUSFS restore..."
+    for f in fs/exec.c fs/open.c fs/stat.c fs/read_write.c drivers/input/input.c drivers/tty/pty.c; do
+        [ -f "$f" ] && sed -i 's/^#ifdef CONFIG_KSU$/#if defined(CONFIG_KSU) \&\& !defined(KSU_NOVA_MODE)/' "$f"
+    done
+    echo "  call sites guarded"
 elif [ "$KSU_ENABLE" = "true" ]; then
     echo "Applying SukiSU-Ultra (kernel commit f4863b20)..."
     curl -LSs "https://github.com/liyafe1997/SukiSU-Ultra/raw/4ff14cf0051d04209c4abd5027d99d8e7780ef5b/kernel/setup.sh" | bash -s f4863b20cc8dc0f8cc67418980f022e43014b598
