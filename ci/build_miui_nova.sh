@@ -103,6 +103,74 @@ SUSFS_SHIM_EOF
     # 所以必须在恢复之后重新执行：execve 规范化、setresuid 注入、reboot 注入、再门控。
     echo "Applying Nova adaptations after SUSFS restore..."
 
+    # --- Patches for SukiSU-Nova builtin-new ---
+    # Fix /dev/ksu device creation so ksd can use direct ioctl instead of reboot supercall
+    # This solves "seccomp blocked" error on Android 14+
+    KDIR="KernelSU/kernel/supercall"
+    if [ -f "$KDIR/supercall.c" ]; then
+        # Use python3 to inject /dev/ksu device creation + includes into supercall.c
+        python3 <<'PYEOF'
+import os
+path = os.path.join("KernelSU", "kernel", "supercall", "supercall.c")
+with open(path, 'r') as f:
+    content = f.read()
+
+if 'device_create' in content and '/dev/ksu' in content:
+    print("SKIP: /dev/ksu already patched")
+else:
+    patches = []
+    # Add includes at top of file
+    inc = '''#include <linux/device.h>
+#include <linux/kdev_t.h>
+'''
+    lines = content.split('\n')
+    new_lines = []
+    header_done = False
+    for line in lines:
+        if not header_done and (line.startswith('#include') or line.strip() == ''):
+            new_lines.append(line)
+        elif not header_done and line.strip().startswith('static'):
+            new_lines.append(inc)
+            new_lines.append('')
+            header_done = True
+            new_lines.append(line)
+        else:
+            new_lines.append(line)
+
+    # Add device creation before ksu_supercalls_init
+    dev_node = '''/* Auto-create /dev/ksu char device for ksd communication (fixes seccomp block) */
+static int __init ksu_install_dev_node(void)
+{
+\tstruct class *cls;
+\tdev_t dev;
+\tint ret;
+
+\tret = alloc_chrdev_region(&dev, 0, 1, "ksu");
+\tif (ret < 0) {
+\t\tpr_err("KernelSU: failed to allocate chrdev region\\n");
+\t\treturn ret;
+\t}
+\tcls = class_create(THIS_MODULE, "ksu");
+\tif (IS_ERR(cls)) {
+\t\tunregister_chrdev_region(dev, 1);
+\t\tpr_err("KernelSU: failed to create class\\n");
+\t\treturn PTR_ERR(cls);
+\t}
+\tdevice_create(cls, NULL, dev, NULL, "ksu");
+\tpr_info("KernelSU: /dev/ksu device minor=%d created\\n", MINOR(dev));
+\treturn 0;
+}
+device_initcall(ksu_install_dev_node);
+
+'''
+    # Insert before void __init ksu_supercalls_init
+    content_new = content.replace('void __init ksu_supercalls_init(void)', dev_node + 'void __init ksu_supercalls_init(void)')
+    with open(path, 'w') as f:
+        f.write(content_new)
+    print("PATCHED: /dev/ksu device node added to supercall.c")
+PYEOF
+    fi
+
     # 1) fs/exec.c：去掉 extern bool ksu_execveat_hook（Nova 不定义），
     #    把 if (likely/unlikely/!ksu_execveat_hook) 分支删掉，保留直接调用。
     #    用 python3 做精确替换——不依赖 shell 的 tab/space 模式匹配。
