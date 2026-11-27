@@ -360,36 +360,17 @@ make $MAKE_ARGS ${TARGET_DEVICE}_defconfig
 # 而当前树内是 v1.5.7；故先关闭 KSU_SUSFS 以保证编译与开机（Nova 自带的
 # mount_hide/sucompat 等隐藏仍然生效）。确认可用后再单独升级树内 SUSFS 到 v2.x。
 if [ "$KSU_ENABLE" = "true" ] && [ "$KSU_MODE" = "nova" ]; then
-    if [ "${SUSFS_ENABLE:-true}" = "true" ] && grep -q "SUSFS_MAGIC" include/linux/susfs_def.h 2>/dev/null; then
-        echo "Enabling KSU_SUSFS (v2.x detected)"
-        scripts/config --file out/.config \
-        -e KSU \
-        -d KSU_TAMPER_SYSCALL_TABLE \
-        -e KSU_LSM_SECURITY_HOOKS \
-        -e KSU_SUSFS \
-        -e KSU_SUSFS_INLINE_HOOK \
-        -e KSU_SUSFS_SUS_PATH \
-        -e KSU_SUSFS_SUS_MOUNT \
-        -e KSU_SUSFS_SUS_KSTAT \
-        -e KSU_SUSFS_SPOOF_UNAME \
-        -e KSU_SUSFS_ENABLE_LOG \
-        -e KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS \
-        -e KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-        -e KSU_SUSFS_OPEN_REDIRECT \
-        -e KSU_SUSFS_SUS_MAP \
-        -e KSU_SUSFS_PRIORITY_UID_FILTER \
-        -e KPM \
-        -e KPROBES
-    else
-        echo "SUSFS v2.x not present; building Nova without KSU_SUSFS"
-        scripts/config --file out/.config \
-        -e KSU \
-        -e KSU_TAMPER_SYSCALL_TABLE \
-        -e KSU_LSM_SECURITY_HOOKS \
-        -d KSU_SUSFS \
-        -e KPM \
-        -e KPROBES
-    fi
+    # Remove SUSFS entirely — it prevents kernel module loading on Linux 4.19,
+    # causing "seccomp blocked" and manager showing "not installed".
+    # Use KPM (KernelPatchManager) + TAMPER_SYSCALL_TABLE instead for root + hide.
+    echo "Building Nova with KPM (SUSFS disabled)"
+    scripts/config --file out/.config \
+    -e KSU \
+    -e KSU_TAMPER_SYSCALL_TABLE \
+    -e KSU_LSM_SECURITY_HOOKS \
+    -d KSU_SUSFS \
+    -e KPM \
+    -e KPROBES
 # SukiSU-Ultra: KSU(MANUAL_HOOK) + SUSFS(树内) + KPM —— 与上游 build.sh 逐项一致
 elif [ "$KSU_ENABLE" = "true" ]; then
     scripts/config --file out/.config \
